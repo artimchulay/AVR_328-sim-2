@@ -428,7 +428,7 @@ function updateFlagsLogic(sreg, r) {
 }
 
 /* ============================================================================
- * БЛОК 5: C→ASM транслятор (ПЕРЕПИСАН)
+ * БЛОК 5: C→ASM транслятор
  * ============================================================================ */
 
 function parseCExpression(expr, defines = {}) {
@@ -565,7 +565,7 @@ function compileCToAsm(code) {
     if (l === 'sei();') { emit('sei', f); return; }
     if (l === 'cli();') { emit('cli', f); return; }
 
-    // --- Регистровые операции: REG = / |= / &= / ^= ---
+    // --- Регистровые операции ---
     const regOpM = l.match(/^([A-Z][A-Z0-9_]*)\s*(\|=|&=|\^=|=)\s*([^;]+);/);
     if (regOpM) {
       const rName = regOpM[1];
@@ -599,40 +599,33 @@ function compileCToAsm(code) {
     }
 
     // --- Переменные ---
-    // var++;
     const incM = l.match(/^([a-zA-Z_]\w*)\s*\+\+;/);
     if (incM) { emit(`inc ${getVarReg(incM[1])}`, f); return; }
-    // var--;
     const decM = l.match(/^([a-zA-Z_]\w*)\s*--;/);
     if (decM) { emit(`dec ${getVarReg(decM[1])}`, f); return; }
-    // var = N;
     const assignM = l.match(/^([a-zA-Z_]\w*)\s*=\s*(0x[0-9A-Fa-f]+|\d+);/);
     if (assignM) {
       emit(`ldi ${getVarReg(assignM[1])}, ${parseCExpression(assignM[2], defines) & 0xFF}`, f);
       return;
     }
-    // var += N;
     const plusEqM = l.match(/^([a-zA-Z_]\w*)\s*\+=\s*(0x[0-9A-Fa-f]+|\d+);/);
     if (plusEqM) {
       emit(`ldi r16, ${parseCExpression(plusEqM[2], defines) & 0xFF}`, f);
       emit(`add ${getVarReg(plusEqM[1])}, r16`, f);
       return;
     }
-    // var -= N;
     const minusEqM = l.match(/^([a-zA-Z_]\w*)\s*-=\s*(0x[0-9A-Fa-f]+|\d+);/);
     if (minusEqM) {
       emit(`ldi r16, ${parseCExpression(minusEqM[2], defines) & 0xFF}`, f);
       emit(`sub ${getVarReg(minusEqM[1])}, r16`, f);
       return;
     }
-    // var = !var;
     const notM = l.match(/^([a-zA-Z_]\w*)\s*=\s*!\s*([a-zA-Z_]\w*);/);
     if (notM) {
       emit(`ldi r16, 1`, f);
       emit(`eor ${getVarReg(notM[1])}, r16`, f);
       return;
     }
-    // PORTx = var;
     const portFromVarM = l.match(/^([A-Z][A-Z0-9_]*)\s*=\s*([a-zA-Z_]\w*);/);
     if (portFromVarM && /^[a-zA-Z_]\w*$/.test(portFromVarM[2])) {
       const isExt = ['EICRA', 'PCICR', 'PCMSK0', 'PCMSK1', 'PCMSK2'].includes(portFromVarM[1]);
@@ -643,12 +636,8 @@ function compileCToAsm(code) {
 
     // --- if / else ---
     if (l === '}') {
-      // Закрытие if-блока
       if (context.closeIf) {
         emit(`${context.closeIf.falseLabel}:`, f);
-        if (context.closeIf.hasElse) {
-          // false-метка уже стоит перед else
-        }
       }
       return;
     }
@@ -703,7 +692,6 @@ function compileCToAsm(code) {
         return;
       }
 
-      // fallback: никогда не выполняем
       emit(`rjmp ${falseLbl}`, f);
       context.closeIf = { falseLabel: falseLbl, endLabel: endLbl, hasElse: false };
       return;
@@ -714,7 +702,7 @@ function compileCToAsm(code) {
     }
   }
 
-  // --- Тело main (с меткой цикла) ---
+  // --- Тело main ---
   asm.push({ asm: '__main_loop:', lineNum: 1 });
   const mainContext = {};
   for (const m of mainLines) {
@@ -738,7 +726,6 @@ function compileCToAsm(code) {
     asm.push({ asm: 'reti', lineNum: block[block.length - 1]?.lineNum || 1 });
   }
 
-  // --- Сохранение карты переменных для UI ---
   if (Object.keys(varRegs).length > 0) {
     const mapStr = Object.entries(varRegs).map(([n, r]) => `${n}=${r}`).join(', ');
     asm.push({ asm: `; vars: ${mapStr}`, lineNum: 1 });
@@ -1208,7 +1195,7 @@ function parsePinName(pinStr) {
 }
 
 /* ============================================================================
- * БЛОК 7: HEX-экспорт (заглушка, честно предупреждает)
+ * БЛОК 7: HEX-экспорт
  * ============================================================================ */
 
 function makeHexRecord(address, recordType, dataBytes) {
@@ -1221,10 +1208,10 @@ function makeHexRecord(address, recordType, dataBytes) {
 
 function exportIntelHex(program) {
   const lines = [];
-  lines.push(':020000040000FA'); // extended linear address 0
+  lines.push(':020000040000FA');
   for (let i = 0; i < program.length; i += 8) {
     const chunk = [];
-    for (let j = 0; j < 8; j++) chunk.push(0x00); // заглушка
+    for (let j = 0; j < 8; j++) chunk.push(0x00);
     lines.push(makeHexRecord(i * 2, 0, chunk));
   }
   lines.push(':00000001FF');

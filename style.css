@@ -1,455 +1,55 @@
-/* ============================================================================
-   AVR ATmega328P Web Simulator — кастомные стили
-   Автор: переработка сгенерированного Tailwind + ручные семантические классы
-   ============================================================================ */
-
-/* ----------------------------------------------------------------------------
-   1. Переменные (дизайн-токены)
-   ---------------------------------------------------------------------------- */
 :root {
-  /* Базовые цвета */
-  --bg-dark:        #0e1117;
-  --panel-bg:       #151922;
-  --panel-bg-2:     #181d28;
-  --card-bg:        #1d222e;
-  --card-bg-2:      #141822;
-  --card-bg-3:      #121620;
-  --border-color:   #2b3346;
-  --border-soft:    #262f40;
-  --border-strong:  #3b455d;
-
-  /* Текст */
-  --text-main:      #f1f5f9;
-  --text-muted:     #8b9bb4;
-  --text-dim:       #64748b;
-
-  /* Акценты */
-  --accent:         #00e676;
-  --accent-blue:    #2979ff;
-  --accent-gold:    #ffb300;
-  --accent-red:     #ff3d00;
-
-  /* Подсветка синтаксиса (для будущего) */
-  --syn-op:    #38bdf8;
-  --syn-com:   #4ade80;
-  --syn-lbl:   #fb923c;
-  --syn-dir:   #c084fc;
-  --syn-num:   #fcd34d;
-  --syn-kw:    #f43f5e;
-  --syn-type:  #a855f7;
-
-  /* Метрики */
-  --line-height: 22px;
-  --radius-sm:   4px;
-  --radius-md:   6px;
-  --radius-lg:   8px;
-  --radius-xl:   12px;
+  --bg-dark: #0e1117;
+  --panel-bg: #151922;
+  --border-color: #2b3346;
+  --text-main: #f1f5f9;
+  --text-muted: #8b9bb4;
+  --accent: #00e676;
+  --accent-blue: #2979ff;
+  --accent-gold: #ffb300;
+  --accent-red: #ff3d00;
 }
 
-/* ----------------------------------------------------------------------------
-   2. Сброс и базовая типографика
-   ---------------------------------------------------------------------------- */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
-html,
-body {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  background: var(--bg-dark);
-  color: var(--text-main);
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  background: var(--bg-dark); color: var(--text-main);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
 }
 
-button {
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
+/* Скроллбары */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #080a0f; }
+::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3e4963; }
 
-/* ----------------------------------------------------------------------------
-   3. Скроллбары
-   ---------------------------------------------------------------------------- */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #080a0f;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #3e4963;
-}
-
-/* ----------------------------------------------------------------------------
-   4. Toolbar (верхняя панель)
-   ---------------------------------------------------------------------------- */
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 12px;
-  background: var(--panel-bg);
-  border-bottom: 1px solid var(--border-color);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
-  flex-shrink: 0;
-}
-
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.logo {
-  white-space: nowrap;
-}
-
-.select-wrapper select {
-  outline: none;
-}
-
-/* Кнопки toolbar */
+/* Кнопки */
 .btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #fff;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  transition: all 0.15s ease;
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600;
+  border: 1px solid var(--border-color); background: #1d222e; color: #fff;
+  cursor: pointer; transition: all 0.15s ease;
 }
-.btn:hover {
-  background: #252c3c;
-  border-color: var(--text-muted);
-}
+.btn:hover { background: #252c3c; border-color: var(--text-muted); }
+.btn-step { color: #90caf9; background: rgba(41,121,255,0.15); border-color: rgba(41,121,255,0.5); }
+.btn-step:hover { background: rgba(41,121,255,0.25); border-color: var(--accent-blue); }
+.btn-run { color: #b9f6ca; background: rgba(0,230,118,0.15); border-color: rgba(0,230,118,0.5); }
+.btn-run:hover { background: rgba(0,230,118,0.25); border-color: var(--accent); }
+.btn-run.running { color: #ffab91; background: rgba(255,61,0,0.2); border-color: var(--accent-red); }
+.btn-reset { color: var(--text-muted); }
+.btn-reset:hover { color: #fff; }
 
-.btn-step {
-  color: #90caf9;
-  background: rgba(41, 121, 255, 0.15);
-  border-color: rgba(41, 121, 255, 0.5);
-}
-.btn-step:hover {
-  background: rgba(41, 121, 255, 0.25);
-  border-color: var(--accent-blue);
-}
+/* Панели */
+.slide-panel { display: flex; flex-direction: column; min-width: 0; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+.slide-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #181d28; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+.board-card, .cpu-subcard { padding: 10px; background: #1d222e; border: 1px solid var(--border-color); border-radius: 8px; }
+.circuit-item-card { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; background: #141822; border: 1px solid #262f40; border-radius: 8px; }
 
-.btn-run {
-  color: #b9f6ca;
-  background: rgba(0, 230, 118, 0.15);
-  border-color: rgba(0, 230, 118, 0.5);
-}
-.btn-run:hover {
-  background: rgba(0, 230, 118, 0.25);
-  border-color: var(--accent);
-}
-.btn-run.running {
-  color: #ffab91;
-  background: rgba(255, 61, 0, 0.2);
-  border-color: var(--accent-red);
-}
-
-.btn-reset {
-  color: var(--text-muted);
-}
-.btn-reset:hover {
-  color: #fff;
-}
-
-.speed-box {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: var(--card-bg-3);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-
-.speed-box input[type="range"] {
-  width: 64px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-/* ----------------------------------------------------------------------------
-   5. Hint banner (подсказки под toolbar)
-   ---------------------------------------------------------------------------- */
-.hint-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  font-size: 12px;
-  color: var(--text-main);
-  background: rgba(23, 37, 84, 0.25);
-  border-bottom: 1px solid rgba(30, 58, 138, 0.4);
-}
-.hint-banner .hint-text {
-  flex: 1;
-}
-.hint-banner b {
-  color: #fcd34d;
-  font-weight: 700;
-}
-
-/* ----------------------------------------------------------------------------
-   6. Сетка окон (главный контейнер)
-   ---------------------------------------------------------------------------- */
-.app-container {
-  display: flex;
-  flex-direction: column;
-  width: 100vw;
-  height: 100vh;
-}
-
-.slider-viewport {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  padding: 8px 10px;
-}
-
-.slider-track {
-  display: grid;
-  height: 100%;
-  gap: 10px;
-  min-width: 0;
-}
-
-/* ----------------------------------------------------------------------------
-   7. Панель (карточка окна)
-   ---------------------------------------------------------------------------- */
-.slide-panel {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
-  overflow: hidden;
-}
-
-.slide-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 8px 12px;
-  background: var(--panel-bg-2);
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-/* ----------------------------------------------------------------------------
-   8. Редактор кода
-   ---------------------------------------------------------------------------- */
-.editor-wrapper {
-  display: flex;
-  flex: 1;
-  height: 100%;
-  overflow: hidden;
-  background: #080a0f;
-}
-
-.line-gutter {
-  width: 48px;
-  height: 100%;
-  padding-top: 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  background: #06070a;
-  border-right: 1px solid #1a1e28;
-  user-select: none;
-  overflow: hidden;
-}
-
-.gutter-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: var(--line-height);
-  padding: 0 4px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.gutter-row:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-.gutter-row.current {
-  background: rgba(251, 191, 36, 0.2);
-  color: #fcd34d;
-  font-weight: 700;
-}
-
-.editor-container {
-  flex: 1;
-  height: 100%;
-  position: relative;
-  overflow: hidden;
-}
-
-.editor-container textarea {
-  width: 100%;
-  height: 100%;
-  padding: 10px;
-  background: transparent;
-  color: #e2e8f0;
-  caret-color: var(--syn-op);
-  resize: none;
-  border: none;
-  outline: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: var(--line-height);
-  white-space: pre;
-  overflow: auto;
-  tab-size: 4;
-}
-
-/* ----------------------------------------------------------------------------
-   9. Плата и карточки внутри панелей
-   ---------------------------------------------------------------------------- */
-.board-scroll-area,
-.cpu-scroll-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.board-card,
-.cpu-subcard {
-  padding: 10px 12px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-}
-
-.cpu-subcard {
-  padding: 10px;
-}
-
-.circuit-bench {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 140px;
-  overflow-y: auto;
-}
-
-.circuit-item-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px;
-  background: var(--card-bg-2);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-}
-
-/* ----------------------------------------------------------------------------
-   10. Осциллограф
-   ---------------------------------------------------------------------------- */
-canvas {
-  display: block;
-  max-width: 100%;
-}
-
-/* ----------------------------------------------------------------------------
-   11. Подсветка синтаксиса (для будущего редактора)
-   ---------------------------------------------------------------------------- */
-.syn-op    { color: var(--syn-op); }
-.syn-com   { color: var(--syn-com); font-style: normal; }
-.syn-lbl   { color: var(--syn-lbl); }
-.syn-dir   { color: var(--syn-dir); }
-.syn-num   { color: var(--syn-num); }
-.syn-kw    { color: var(--syn-kw); }
-.syn-type  { color: var(--syn-type); }
-
-/* ----------------------------------------------------------------------------
-   12. Утилиты (используются в JSX, оставлены минимально)
-   ---------------------------------------------------------------------------- */
-.h-full      { height: 100%; }
-.w-full      { width: 100%; }
-.flex        { display: flex; }
-.flex-col    { flex-direction: column; }
-.items-center{ align-items: center; }
-.justify-between { justify-content: space-between; }
-.gap-1       { gap: 4px; }
-.gap-1\.5    { gap: 6px; }
-.gap-2       { gap: 8px; }
-.gap-2\.5    { gap: 10px; }
-.gap-3       { gap: 12px; }
-.grid        { display: grid; }
-.grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.grid-cols-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
-.min-w-0     { min-width: 0; }
-.overflow-y-auto { overflow-y: auto; }
-.overflow-hidden { overflow: hidden; }
-.rounded-lg  { border-radius: 8px; }
-.rounded-xl  { border-radius: 12px; }
-.font-mono   { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.font-bold   { font-weight: 700; }
-.text-xs     { font-size: 12px; }
-.text-sm     { font-size: 13px; }
-.text-white  { color: #fff; }
-.text-slate-300 { color: #cbd5e1; }
-.text-slate-400 { color: #94a3b8; }
-.text-slate-500 { color: #64748b; }
-.select-none { user-select: none; }
-.transition  { transition: all 0.15s ease; }
-
-/* ----------------------------------------------------------------------------
-   13. Адаптивность (упрощённо — только то, что важно)
-   ---------------------------------------------------------------------------- */
-@media (max-width: 768px) {
-  .toolbar {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .slider-track {
-    grid-template-columns: 1fr !important;
-    grid-auto-rows: minmax(240px, auto);
-    overflow-y: auto;
-  }
-}
-
-/* ----------------------------------------------------------------------------
-   14. Печать (на случай, если студент захочет распечатать отчёт)
-   ---------------------------------------------------------------------------- */
-@media print {
-  .toolbar,
-  .hint-banner {
-    display: none;
-  }
-  body {
-    background: #fff;
-    color: #000;
-  }
-}
+/* Редактор */
+.editor-wrapper { display: flex; flex: 1; height: 100%; overflow: hidden; background: #080a0f; }
+.line-gutter { width: 48px; height: 100%; padding-top: 8px; font-family: monospace; font-size: 13px; background: #06070a; border-right: 1px solid #1a1e28; user-select: none; overflow: hidden; }
+.gutter-row { display: flex; align-items: center; justify-content: space-between; height: 22px; padding: 0 4px; cursor: pointer; }
+.gutter-row:hover { background: rgba(255,255,255,0.05); }
+.editor-container textarea { width: 100%; height: 100%; padding: 10px; background: transparent; color: #e2e8f0; caret-color: #38bdf8; resize: none; border: none; outline: none; font-family: monospace; font-size: 13px; line-height: 22px; white-space: pre; overflow: auto; }

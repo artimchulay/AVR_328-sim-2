@@ -326,7 +326,37 @@
                         </div>
                     </div>
                 </section>
-
+                    <section class="slide-panel tools-slide panel-hidden" id="panel_tools">
+                        <div class="slide-header">
+                            <h2>🧰 Дополнительные инструменты</h2>
+                        </div>
+                        <div class="cpu-scroll-area">
+                            <!-- Конвертер систем счисления -->
+                            <div class="cpu-subcard">
+                                <div class="card-title">Калькулятор систем счисления (DEC / HEX / BIN)</div>
+                                <div class="converter-grid">
+                                    <input type="text" id="convDec" placeholder="DEC (255)" oninput="onConverterInput('dec')">
+                                    <input type="text" id="convHex" placeholder="HEX (0xFF)" oninput="onConverterInput('hex')">
+                                    <input type="text" id="convBin" placeholder="BIN (0b11111111)" oninput="onConverterInput('bin')">
+                                </div>
+                            </div>
+                    
+                            <!-- Наблюдатель за переменными (Watch) -->
+                            <div class="cpu-subcard">
+                                <div class="card-title">Наблюдатель за переменными (Watch: R17..R24)</div>
+                                <table class="watch-table">
+                                    <thead><tr><th>Регистр</th><th>Значение</th><th>HEX</th><th>BIN</th></tr></thead>
+                                    <tbody id="watchTableBody"></tbody>
+                                </table>
+                            </div>
+                    
+                            <!-- Инспектор C -> ASM -->
+                            <div class="cpu-subcard">
+                                <div class="card-title">Инспектор Си ➔ Ассемблер (с текущей строкой PC)</div>
+                                <pre class="dump-view-wide" id="asmInspectorCode" style="height:140px;"></pre>
+                            </div>
+                        </div>
+                    </section>
             </div>
         </main>
     </div>

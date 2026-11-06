@@ -4,22 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
     <title>AVR ATmega328P Studio & Logic Analyzer</title>
+    <!-- Векторная иконка чипа AVR -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='14' y='14' width='36' height='36' rx='4' fill='%231e293b' stroke='%2300e676' stroke-width='2'/%3E%3Ccircle cx='20' cy='20' r='2' fill='%2300e676'/%3E%3Ctext x='32' y='36' font-size='10' font-family='monospace' font-weight='bold' fill='%23f1f5f9' text-anchor='middle'%3EAVR%3C/text%3E%3Cpath d='M6 22h8M6 32h8M6 42h8M50 22h8M50 32h8M50 42h8M22 6v8M32 6v8M42 6v8M22 50v8M32 50v8M42 50v8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="app-container">
         
-        <!-- ШАПКА TOOLBAR -->
+        <!-- =========================================================
+             1. ВЕРХНЯЯ ШАПКА TOOLBAR (СТРОГО ОДНА ЛИНИЯ НА ПК)
+             ========================================================= -->
         <header class="toolbar" id="mainToolbar">
+            <!-- Левая зона: Логотип и выбор программы -->
             <div class="toolbar-left">
                 <div class="logo">⚡ <span>AVR Studio</span></div>
                 <div class="select-wrapper">
                     <select id="exampleSelector" onchange="loadSelectedExample()">
+                        <!-- Программы на C -->
                         <option value="c_interrupt_int0">⚡ C: Внешнее прерывание INT0 (Кнопка K1)</option>
                         <option value="c_blink_counter">⚡ C: Мигающий светодиод L (Счетчик 800 000)</option>
                         <option value="c_zadanie5">⚡ C: Кнопки-переключатели светодиодов (PD2..PD4)</option>
                         <option value="c_example3">⚡ C: Кнопка включает светодиод L</option>
+                        <!-- Программы на ASM -->
                         <option value="test_all" selected>📝 ASM: Комплексный тест: команды и флаги SREG</option>
                         <option value="led_running">📝 ASM: Бегущий огонёк (Порт D)</option>
                         <option value="uart_tx">📝 ASM: Отправка текста в терминал (UART)</option>
@@ -28,6 +34,7 @@
                 </div>
             </div>
 
+            <!-- Центральная зона: Кнопки управления CPU и скорость -->
             <div class="toolbar-center">
                 <button type="button" id="btnStep" class="btn btn-step" onclick="cpuStep()" title="Один шаг (F11)">
                     <span>⏭</span> <span class="btn-text">Шаг</span>
@@ -35,7 +42,7 @@
                 <button type="button" id="btnRun" class="btn btn-run" onclick="toggleRun()" title="Пуск / Пауза">
                     <span id="runIcon">▶</span> <span id="runText" class="btn-text">Пуск</span>
                 </button>
-                <button type="button" id="btnReset" class="btn btn-reset" onclick="cpuReset()" title="Сброс процессора">
+                <button type="button" id="btnReset" class="btn btn-reset" onclick="cpuReset()" title="Сброс контроллера">
                     <span>🔄</span> <span class="btn-text">Сброс</span>
                 </button>
                 
@@ -43,9 +50,11 @@
                     <input type="range" id="speedRange" min="1" max="100" value="40" oninput="updateSpeed(this.value)">
                     <span id="speedVal">40 оп/с</span>
                 </div>
+                <!-- Счетчик тактов перенесен в верхнюю шапку -->
                 <span class="cycle-badge" id="cycleCounter">Такты: 0</span>
             </div>
 
+            <!-- Правая зона: Кнопки колонок бок о бок -->
             <nav class="nav-screens" id="panelNav">
                 <button type="button" class="nav-screen-btn active" id="tabBtn_editor" onclick="togglePanel('editor')">📝 Код</button>
                 <button type="button" class="nav-screen-btn active" id="tabBtn_board" onclick="togglePanel('board')">💡 Плата</button>
@@ -55,34 +64,43 @@
             </nav>
         </header>
 
+        <!-- Подсказка к выбранной программе -->
         <div class="hint-banner" id="hintBanner">
             <span class="hint-icon">💡</span>
             <div class="hint-text" id="hintText">Инструкция к выбранному коду...</div>
         </div>
 
-        <!-- ОСНОВНАЯ ЗОНА: 5 ПАНЕЛЕЙ -->
+        <!-- =========================================================
+             2. ОСНОВНАЯ ЗОНА: 5 КОЛОНОК БОК О БОК
+             ========================================================= -->
         <main class="slider-viewport" id="sliderViewport">
             <div class="slider-track" id="panelsTrack">
                 
-                <!-- ПАНЕЛЬ 1: РЕДАКТОР КОДА -->
+                <!-- ---------------------------------------------------------
+                     ПАНЕЛЬ 1: РЕДАКТОР КОДА (С 3 РЕЖИМАМИ: ASM | C | C ➔ ASM)
+                     --------------------------------------------------------- -->
                 <section class="slide-panel editor-slide" id="panel_editor">
                     <div class="slide-header">
                         <div class="slide-header-left">
                             <h2 id="editorTitle">📝 Редактор (.asm)</h2>
+                            <!-- Трехпозиционный переключатель языков -->
                             <div class="lang-switch-btns">
                                 <button type="button" class="lang-btn active" id="btnLangAsm" onclick="setEditorLang('asm')">ASM</button>
                                 <button type="button" class="lang-btn" id="btnLangC" onclick="setEditorLang('c')">C</button>
+                                <button type="button" class="lang-btn" id="btnLangDisasm" onclick="setEditorLang('c_asm')" title="Показать сгенерированный ассемблер с бегающей стрелкой PC">C ➔ ASM</button>
                             </div>
+                            <!-- Размер шрифта -->
                             <div class="font-size-btns">
                                 <button type="button" class="btn-icon" onclick="changeFontSize(-1)">A-</button>
                                 <span id="fontSizeVal">14px</span>
                                 <button type="button" class="btn-icon" onclick="changeFontSize(1)">A+</button>
                             </div>
+                            <!-- Сохранение / Загрузка файлов -->
                             <button type="button" class="btn-icon" onclick="saveCodeToFile()" title="Сохранить файл на диск">💾</button>
                             <button type="button" class="btn-icon" onclick="document.getElementById('fileOpenerInput').click()" title="Открыть файл с диска">📂</button>
                             <input type="file" id="fileOpenerInput" style="display:none;" onchange="loadCodeFromFile(event)" accept=".c,.asm,.txt">
                             <button type="button" class="btn-mobile-tab" id="mobileTabBtn" onclick="applyGhostCompletion()" title="Применить автодополнение">⇥ Tab</button>
-                            <button type="button" class="btn-clear-code" onclick="clearEditor()" title="Очистить код">🗑️</button>
+                            <button type="button" class="btn-clear-code" onclick="clearEditor()" title="Очистить редактор">🗑️</button>
                         </div>
                         <div class="editor-status" id="editorStatusBar">
                             <span id="compilerStatus">Готов</span>
@@ -98,101 +116,120 @@
                     </div>
                 </section>
 
-                <!-- ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА -->
+                <!-- ---------------------------------------------------------
+                     ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА (СО СВОРАЧИВАЕМЫМИ КАРТОЧКАМИ)
+                     --------------------------------------------------------- -->
                 <section class="slide-panel board-slide" id="panel_board">
                     <div class="slide-header">
                         <h2>💡 Интерактивная плата ввода-вывода</h2>
                         <button type="button" class="btn-mini btn-io-settings" onclick="openIoModal()">⚙️ Настройка I/O</button>
                     </div>
                     <div class="board-scroll-area">
-                        <!-- Текстовый дисплей LCD 1602 -->
-                        <div class="board-card lcd-card">
-                            <div class="port-header-row">
+                        
+                        <!-- 1. Текстовый дисплей LCD 1602 (Сворачиваемый) -->
+                        <div class="board-card lcd-card" id="card_lcd">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_lcd')">
                                 <div class="card-title">Текстовый дисплей LCD 1602 (HD44780)</div>
-                                <button type="button" class="btn-link" onclick="clearLcd()">Очистить</button>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <button type="button" class="btn-link" onclick="event.stopPropagation(); clearLcd()">Очистить</button>
+                                    <span class="collapse-icon" id="card_lcd_icon">▲</span>
+                                </div>
                             </div>
-                            <div class="lcd-screen">
-                                <div class="lcd-line" id="lcdLine1">AVR Studio 1602 </div>
-                                <div class="lcd-line" id="lcdLine2">Ready to work!  </div>
-                            </div>
-                        </div>
-
-                        <!-- Базовые кнопки K1..K8 -->
-                        <div class="board-card" id="defaultButtonsCard">
-                            <div class="card-title">Кнопочный модуль (Прерывания INT0, INT1, PCINT)</div>
-                            <p class="board-note">Клик — зажать кнопку (лог. 0). Повторный клик — отжать (лог. 1).</p>
-                            <div class="btn-matrix" id="defaultBtnMatrix">
-                                <button type="button" class="v-btn" id="vbtn_K1" onclick="toggleVButton('K1')">K1 <span>PD2 (INT0)</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K2" onclick="toggleVButton('K2')">K2 <span>PD3 (INT1)</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K3" onclick="toggleVButton('K3')">K3 <span>PD4</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K4" onclick="toggleVButton('K4')">K4 <span>PB0 (PCINT0)</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K5" onclick="toggleVButton('K5')">K5 <span>PB1 (PCINT1)</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K6" onclick="toggleVButton('K6')">K6 <span>PB2 (PCINT2)</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K7" onclick="toggleVButton('K7')">K7 <span>PB3</span></button>
-                                <button type="button" class="v-btn" id="vbtn_K8" onclick="toggleVButton('K8')">K8 <span>PB4</span></button>
+                            <div class="card-collapsible-body">
+                                <div class="lcd-screen">
+                                    <div class="lcd-line" id="lcdLine1">AVR Studio 1602 </div>
+                                    <div class="lcd-line" id="lcdLine2">Ready to work!  </div>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Пользовательский блок компонентов -->
+                        <!-- 2. Кнопочный модуль K1..K8 (Сворачиваемый) -->
+                        <div class="board-card" id="card_buttons">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_buttons')">
+                                <div class="card-title">Кнопочный модуль (INT0, INT1, PCINT)</div>
+                                <span class="collapse-icon" id="card_buttons_icon">▲</span>
+                            </div>
+                            <div class="card-collapsible-body">
+                                <p class="board-note">Клик — зажать кнопку (лог. 0). Повторный клик — отжать (лог. 1).</p>
+                                <div class="btn-matrix" id="defaultBtnMatrix">
+                                    <button type="button" class="v-btn" id="vbtn_K1" onclick="toggleVButton('K1')">K1 <span>PD2 (INT0)</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K2" onclick="toggleVButton('K2')">K2 <span>PD3 (INT1)</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K3" onclick="toggleVButton('K3')">K3 <span>PD4</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K4" onclick="toggleVButton('K4')">K4 <span>PB0 (PCINT0)</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K5" onclick="toggleVButton('K5')">K5 <span>PB1 (PCINT1)</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K6" onclick="toggleVButton('K6')">K6 <span>PB2 (PCINT2)</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K7" onclick="toggleVButton('K7')">K7 <span>PB3</span></button>
+                                    <button type="button" class="v-btn" id="vbtn_K8" onclick="toggleVButton('K8')">K8 <span>PB4</span></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. Пользовательские компоненты -->
                         <div class="board-card custom-io-card" id="customIoCard" style="display: none;">
                             <div class="card-title" style="color: var(--accent-gold);">Пользовательский модуль I/O</div>
                             <div class="custom-components-grid" id="customComponentsGrid"></div>
                         </div>
 
-                        <!-- Светодиоды L, TX, RX -->
-                        <div class="board-card">
-                            <div class="card-title">Светодиоды платы [L, TX, RX]</div>
-                            <div class="board-leds-row">
-                                <div class="single-led">
-                                    <div class="led-light" id="ledPB5"></div>
-                                    <span class="led-label">L (PB5)</span>
-                                </div>
-                                <div class="single-led">
-                                    <div class="led-light" id="ledTX"></div>
-                                    <span class="led-label">TX (PD1)</span>
-                                </div>
-                                <div class="single-led">
-                                    <div class="led-light" id="ledRX"></div>
-                                    <span class="led-label">RX (PD0)</span>
+                        <!-- 4. Светодиоды платы (Сворачиваемые) -->
+                        <div class="board-card" id="card_leds">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_leds')">
+                                <div class="card-title">Светодиоды платы [L, TX, RX]</div>
+                                <span class="collapse-icon" id="card_leds_icon">▲</span>
+                            </div>
+                            <div class="card-collapsible-body">
+                                <div class="board-leds-row">
+                                    <div class="single-led"><div class="led-light" id="ledPB5"></div><span class="led-label">L (PB5)</span></div>
+                                    <div class="single-led"><div class="led-light" id="ledTX"></div><span class="led-label">TX (PD1)</span></div>
+                                    <div class="single-led"><div class="led-light" id="ledRX"></div><span class="led-label">RX (PD0)</span></div>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Аналоговый потенциометр (Тема 7) -->
-                        <div class="board-card analog-card">
-                            <div class="port-header-row">
-                                <div class="card-title">Аналоговый потенциометр (Тема 7: АЦП / Компаратор)</div>
-                                <span class="analog-val-badge" id="potVoltageBadge">0.00 V (ADC: 0)</span>
+                        <!-- 5. Аналоговый потенциометр (Сворачиваемый) -->
+                        <div class="board-card analog-card" id="card_pot">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_pot')">
+                                <div class="card-title">Аналоговый потенциометр (Тема 7)</div>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <span class="analog-val-badge" id="potVoltageBadge">0.00 V (ADC: 0)</span>
+                                    <span class="collapse-icon" id="card_pot_icon">▲</span>
+                                </div>
                             </div>
-                            <div class="analog-slider-box">
-                                <span class="analog-pin-tag">PC0 (ADC0) / PD7 (AIN1)</span>
-                                <input type="range" id="potentiometerRange" min="0" max="1023" value="0" step="1" oninput="updatePotentiometer(this.value)">
+                            <div class="card-collapsible-body">
+                                <div class="analog-slider-box">
+                                    <span class="analog-pin-tag">PC0 (ADC0) / PD7 (AIN1)</span>
+                                    <input type="range" id="potentiometerRange" min="0" max="1023" value="0" step="1" oninput="updatePotentiometer(this.value)">
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Линейка светодиодов портов -->
-                        <div class="board-card">
-                            <div class="port-header-row">
+                        <!-- 6. Линейка портов (Сворачиваемая) -->
+                        <div class="board-card" id="card_port_leds">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_port_leds')">
                                 <div class="card-title" id="ledPortTitle">Линейка светодиодов (Порт D)</div>
-                                <div class="port-selector-btns">
-                                    <button type="button" class="port-btn active" id="btnPortD" onclick="selectLedPort('D')">Порт D</button>
-                                    <button type="button" class="port-btn" id="btnPortB" onclick="selectLedPort('B')">Порт B</button>
-                                    <button type="button" class="port-btn" id="btnPortC" onclick="selectLedPort('C')">Порт C</button>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <div class="port-selector-btns" onclick="event.stopPropagation()">
+                                        <button type="button" class="port-btn active" id="btnPortD" onclick="selectLedPort('D')">Порт D</button>
+                                        <button type="button" class="port-btn" id="btnPortB" onclick="selectLedPort('B')">Порт B</button>
+                                        <button type="button" class="port-btn" id="btnPortC" onclick="selectLedPort('C')">Порт C</button>
+                                    </div>
+                                    <span class="collapse-icon" id="card_port_leds_icon">▲</span>
                                 </div>
                             </div>
-                            <div class="led-bar" id="portLedsBar">
-                                <div class="led-col"><div class="led-light" id="ledPin7"></div><span class="led-bit-name" id="lblPin7">D7</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin6"></div><span class="led-bit-name" id="lblPin6">D6</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin5"></div><span class="led-bit-name" id="lblPin5">D5</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin4"></div><span class="led-bit-name" id="lblPin4">D4</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin3"></div><span class="led-bit-name" id="lblPin3">D3</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin2"></div><span class="led-bit-name" id="lblPin2">D2</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin1"></div><span class="led-bit-name" id="lblPin1">D1</span></div>
-                                <div class="led-col"><div class="led-light" id="ledPin0"></div><span class="led-bit-name" id="lblPin0">D0</span></div>
+                            <div class="card-collapsible-body">
+                                <div class="led-bar" id="portLedsBar">
+                                    <div class="led-col"><div class="led-light" id="ledPin7"></div><span class="led-bit-name" id="lblPin7">D7</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin6"></div><span class="led-bit-name" id="lblPin6">D6</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin5"></div><span class="led-bit-name" id="lblPin5">D5</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin4"></div><span class="led-bit-name" id="lblPin4">D4</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin3"></div><span class="led-bit-name" id="lblPin3">D3</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin2"></div><span class="led-bit-name" id="lblPin2">D2</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin1"></div><span class="led-bit-name" id="lblPin1">D1</span></div>
+                                    <div class="led-col"><div class="led-light" id="ledPin0"></div><span class="led-bit-name" id="lblPin0">D0</span></div>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Терминал UART + Сигналы Порта C -->
+                        <!-- 7. Терминал UART -->
                         <div class="board-card uart-card">
                             <div class="uart-header">
                                 <div class="port-selector-btns">
@@ -218,7 +255,9 @@
                     </div>
                 </section>
 
-                <!-- ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР -->
+                <!-- ---------------------------------------------------------
+                     ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР
+                     --------------------------------------------------------- -->
                 <section class="slide-panel analyzer-slide" id="panel_analyzer">
                     <div class="slide-header">
                         <div class="slide-header-left">
@@ -231,10 +270,10 @@
                             </div>
                         </div>
                         <div class="analyzer-controls">
-                            <button type="button" class="btn-icon" onclick="clearAnalyzer()">🗑️</button>
-                            <button type="button" class="btn-icon" onclick="zoomAnalyzer(-1)">-</button>
+                            <button type="button" class="btn-icon" onclick="clearAnalyzer()" title="Очистить график">🗑️</button>
+                            <button type="button" class="btn-icon" onclick="zoomAnalyzer(-1)" title="Отдалить">-</button>
                             <span id="analyzerZoomVal">1.0x</span>
-                            <button type="button" class="btn-icon" onclick="zoomAnalyzer(1)">+</button>
+                            <button type="button" class="btn-icon" onclick="zoomAnalyzer(1)" title="Приблизить">+</button>
                         </div>
                     </div>
                     <div class="analyzer-body">
@@ -245,7 +284,9 @@
                     </div>
                 </section>
 
-                <!-- ПАНЕЛЬ 4: РЕГИСТРЫ CPU И ПАМЯТЬ -->
+                <!-- ---------------------------------------------------------
+                     ПАНЕЛЬ 4: РЕГИСТРЫ CPU И ПАМЯТЬ (+ FLASH И EEPROM)
+                     --------------------------------------------------------- -->
                 <section class="slide-panel cpu-slide" id="panel_cpu">
                     <div class="slide-header">
                         <h2>⚙️ Регистры процессора и память</h2>
@@ -287,12 +328,15 @@
                     </div>
                 </section>
 
-                <!-- ПАНЕЛЬ 5: ИНСТРУМЕНТЫ -->
+                <!-- ---------------------------------------------------------
+                     ПАНЕЛЬ 5: ДОПОЛНИТЕЛЬНЫЕ ИНСТРУМЕНТЫ
+                     --------------------------------------------------------- -->
                 <section class="slide-panel tools-slide panel-hidden" id="panel_tools">
                     <div class="slide-header">
                         <h2>🧰 Дополнительные инструменты</h2>
                     </div>
                     <div class="cpu-scroll-area">
+                        <!-- Калькулятор систем счисления -->
                         <div class="cpu-subcard">
                             <div class="card-title">Калькулятор систем счисления (DEC / HEX / BIN)</div>
                             <div class="converter-grid">
@@ -302,6 +346,7 @@
                             </div>
                         </div>
 
+                        <!-- Наблюдатель за переменными (Watch) -->
                         <div class="cpu-subcard">
                             <div class="card-title">Наблюдатель за переменными (Watch: R17..R24)</div>
                             <table class="watch-table">
@@ -310,6 +355,7 @@
                             </table>
                         </div>
 
+                        <!-- Инспектор Си -> Ассемблер -->
                         <div class="cpu-subcard">
                             <div class="card-title">Инспектор Си ➔ Ассемблер (с текущей строкой PC)</div>
                             <pre class="dump-view-wide" id="asmInspectorCode" style="height:140px;"></pre>

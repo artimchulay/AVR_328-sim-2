@@ -1124,3 +1124,26 @@ canvas#logicCanvas { display: block; }
 }
 .watch-table th { color: var(--text-muted); text-align: left; padding: 4px; border-bottom: 1px solid var(--border-color); }
 .watch-table td { padding: 4px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #fff; }
+
+/* Сворачиваемые карточки платы */
+.card-collapsible-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+.collapse-icon {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+.board-card.collapsed .card-collapsible-body {
+    display: none !important;
+}
+.board-card.collapsed .card-title {
+    margin-bottom: 0 !important;
+}
+.board-card.collapsed {
+    padding: 6px 10px !important;
+}

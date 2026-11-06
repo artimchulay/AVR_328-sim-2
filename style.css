@@ -1082,3 +1082,45 @@ canvas#logicCanvas { display: block; }
     flex-wrap: nowrap;
     overflow: hidden;
 }
+/* Виртуальный дисплей LCD 1602 */
+.lcd-card {
+    background: #0d1a2d !important;
+    border-color: #1e3a8a !important;
+}
+.lcd-screen {
+    background: #0284c7;
+    color: #ffffff;
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+    font-weight: 700;
+    padding: 8px 12px;
+    border-radius: 4px;
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.5), 0 0 12px rgba(2, 132, 199, 0.4);
+    letter-spacing: 2px;
+}
+.lcd-line { white-space: pre; height: 20px; line-height: 20px; }
+
+/* Калькулятор и таблица Watch */
+.converter-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+.converter-grid input {
+    background: #080a0f;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: #38bdf8;
+    padding: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    outline: none;
+}
+.watch-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76em;
+    font-family: var(--font-mono);
+}
+.watch-table th { color: var(--text-muted); text-align: left; padding: 4px; border-bottom: 1px solid var(--border-color); }
+.watch-table td { padding: 4px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #fff; }

@@ -158,7 +158,13 @@ function switchBoardBottomTab(tab) {
     document.getElementById('viewExtraPins').style.display = isUart ? 'none' : 'block';
     if (!isUart) renderExtraPins();
 }
-
+function toggleCardCollapse(cardId) {
+    const card = document.getElementById(cardId);
+    const icon = document.getElementById(cardId + '_icon');
+    if (!card) return;
+    const isCollapsed = card.classList.toggle('collapsed');
+    if (icon) icon.textContent = isCollapsed ? '▼' : '▲';
+}
 /* ================= 2. ДЕБАГГЕР: АНАЛИЗ ОШИБОК И СКОБОК ================= */
 
 const KNOWN_OPS = new Set([
@@ -2659,11 +2665,39 @@ function updateSyntax() {
     renderGutter();
 }
 
+let cachedUserCCode = ''; // Память для кода Си
+
 function setEditorLang(lang) {
+    const txtArea = document.getElementById('asmCode');
+
+    // Если переключаемся в C ➔ ASM, запоминаем ваш Си-код
+    if (currentLang === 'c' && lang === 'c_asm') {
+        cachedUserCCode = txtArea.value;
+    }
+
     currentLang = lang;
-    document.getElementById('btnLangAsm').classList.toggle('active', lang === 'asm');
-    document.getElementById('btnLangC').classList.toggle('active', lang === 'c');
-    document.getElementById('editorTitle').textContent = lang === 'c' ? '⚡ Редактор (C)' : '📝 Редактор (.asm)';
+
+    document.getElementById('btnLangAsm')?.classList.toggle('active', lang === 'asm');
+    document.getElementById('btnLangC')?.classList.toggle('active', lang === 'c');
+    document.getElementById('btnLangDisasm')?.classList.toggle('active', lang === 'c_asm');
+
+    if (lang === 'c_asm') {
+        document.getElementById('editorTitle').textContent = '⚡ Листинг C ➔ ASM';
+        txtArea.readOnly = true;
+        if (cachedUserCCode) {
+            const compiled = compileCToAsm(cachedUserCCode);
+            txtArea.value = compiled.map(item => item.asm).join('\n');
+        }
+    } else {
+        txtArea.readOnly = false;
+        if (lang === 'c') {
+            document.getElementById('editorTitle').textContent = '⚡ Редактор (C)';
+            if (cachedUserCCode) txtArea.value = cachedUserCCode;
+        } else {
+            document.getElementById('editorTitle').textContent = '📝 Редактор (.asm)';
+        }
+    }
+
     updateSyntax();
     cpuReset();
 }

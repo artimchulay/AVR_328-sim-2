@@ -60,6 +60,7 @@
                 <button type="button" class="nav-screen-btn active" id="tabBtn_board" onclick="togglePanel('board')">💡 Плата</button>
                 <button type="button" class="nav-screen-btn active" id="tabBtn_analyzer" onclick="togglePanel('analyzer')">📊 Анализатор</button>
                 <button type="button" class="nav-screen-btn active" id="tabBtn_cpu" onclick="togglePanel('cpu')">⚙️ Процессор</button>
+                <button type="button" class="nav-screen-btn" id="tabBtn_tools" onclick="togglePanel('tools')">🧰 Инструменты</button>
             </nav>
         </header>
 
@@ -94,6 +95,9 @@
                             <!-- Мобильная плашка автодополнения (появляется при вводе) -->
                             <button type="button" class="btn-mobile-tab" id="mobileTabBtn" onclick="applyGhostCompletion()" title="Применить автодополнение">⇥ Tab</button>
                             <button type="button" class="btn-clear-code" onclick="clearEditor()" title="Очистить редактор">🗑️</button>
+                            <button type="button" class="btn-icon" onclick="saveCodeToFile()" title="Сохранить файл на компьютер">💾</button>
+                            <button type="button" class="btn-icon" onclick="document.getElementById('fileOpenerInput').click()" title="Открыть файл с компьютера">📂</button>
+                            <input type="file" id="fileOpenerInput" style="display:none;" onchange="loadCodeFromFile(event)" accept=".c,.asm,.txt">
                         </div>
                         <div class="editor-status" id="editorStatusBar">
                             <span id="compilerStatus">Готов</span>
@@ -127,7 +131,18 @@
                         <button type="button" class="btn-mini btn-io-settings" onclick="openIoModal()" title="Настроить кнопки и светодиоды">⚙️ Настройка I/O</button>
                     </div>
                     <div class="board-scroll-area">
-
+                        
+                        <div class="board-card lcd-card">
+                            <div class="port-header-row">
+                                <div class="card-title">Текстовый дисплей LCD 1602 (HD44780)</div>
+                                <button type="button" class="btn-link" onclick="clearLcd()">Очистить</button>
+                            </div>
+                            <div class="lcd-screen">
+                                <div class="lcd-line" id="lcdLine1">AVR Studio 1602 </div>
+                                <div class="lcd-line" id="lcdLine2">Ready to work!  </div>
+                            </div>
+                        </div>
+                        
                         <!-- Карточка 1: Стандартный кнопочный модуль K1..K8 -->
                         <div class="board-card" id="defaultButtonsCard">
                             <div class="card-title">Кнопочный модуль (Прерывания INT0, INT1, PCINT)</div>

@@ -1380,10 +1380,12 @@ function parseProgram(text) {
         } else if (['sbi', 'cbi', 'bst', 'bld', 'sbrs', 'sbrc'].includes(inst.op)) {
             inst.bit = a[1] ? (parseVal(a[1]) & 0x07) : 0;
         }
-
-        if (['in', 'out', 'sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {
-            inst.ioAddr = resolveIoRamAddr(a[0]);
-        }
+         // Для 'in' порт находится во 2-м аргументе a[1], для остальных — в 1-м a[0]
+         if (inst.op === 'in') {
+             inst.ioAddr = resolveIoRamAddr(a[1]);
+         } else if (['out', 'sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {
+             inst.ioAddr = resolveIoRamAddr(a[0]);
+         }
         if (['lds', 'sts'].includes(inst.op)) {
             inst.dataAddr = resolveDataRamAddr(inst.op === 'lds' ? a[1] : a[0]);
         }

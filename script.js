@@ -1262,14 +1262,15 @@ function compileCToAsm(cCode) {
                 const lblFalse = '__lbl_false_' + (labelCounter++);
                 const lblEnd = '__lbl_end_' + (labelCounter++);
 
-                asmList.push({ asm: 'cpi ' + compReg + ', ' + (cmpVal & 0xFF), lineNum });
+               asmList.push({ asm: 'cpi ' + compReg + ', ' + (cmpVal & 0xFF), lineNum });
                 if (op === '==')      asmList.push({ asm: 'brne ' + lblFalse, lineNum });
                 else if (op === '!=') asmList.push({ asm: 'breq ' + lblFalse, lineNum });
-                else if (op === '>=') asmList.push({ asm: 'brge ' + lblFalse, lineNum });
-                else if (op === '<')  asmList.push({ asm: 'brlt ' + lblFalse, lineNum });
-                else if (op === '>')  asmList.push({ asm: 'brgt ' + lblFalse, lineNum });
-                else if (op === '<=') asmList.push({ asm: 'brle ' + lblFalse, lineNum });
-
+                // Беззнаковые переходы для чисел uint8_t, uint16_t, uint32_t:
+                else if (op === '>=') asmList.push({ asm: 'brlo ' + lblFalse, lineNum }); // Если меньше порога — уходим
+                else if (op === '<')  asmList.push({ asm: 'brsh ' + lblFalse, lineNum }); // Если больше или равно — уходим
+                else if (op === '>')  asmList.push({ asm: 'brls ' + lblFalse, lineNum });
+                else if (op === '<=') asmList.push({ asm: 'brhi ' + lblFalse, lineNum });
+               
                 controlStack.push({ type: 'if', lblFalse, lblEnd });
                 continue;
             }
@@ -2711,18 +2712,24 @@ function renderAsmInspector() {
     if (!box) return;
 
     if (currentLang !== 'c') {
-        box.textContent = "Инспектор доступен в режиме Си (C).\nПереключите язык редактора на C для анализа ассемблерного листинга.";
+        box.innerHTML = '<div style="color:var(--text-muted); padding:10px;">Инспектор доступен в режиме Си (C).<br>Переключите язык редактора на C.</div>';
         return;
     }
 
     let out = '';
     for (let i = 0; i < cpu.program.length; i++) {
         const isCurrent = (i === cpu.pc);
-        const prefix = isCurrent ? '▶ ' : '  ';
-        const line = cpu.program[i].raw || (cpu.program[i].op + ' ' + cpu.program[i].args.join(', '));
-        out += prefix + (i.toString(16).padStart(4, '0').toUpperCase()) + ': ' + line + '\n';
+        const inst = cpu.program[i];
+        const lineText = inst.raw || (inst.op + ' ' + (inst.args ? inst.args.join(', ') : ''));
+        const highlighted = highlightCode(lineText);
+        
+        out += `<div class="inspector-row ${isCurrent ? 'is-current-pc' : ''}">` +
+               `<span class="inspector-pc-arrow">${isCurrent ? '▶' : ''}</span>` +
+               `<span class="inspector-addr">${i.toString(16).padStart(4, '0').toUpperCase()}:</span>` +
+               `<span class="inspector-code-text">${highlighted}</span>` +
+               `</div>`;
     }
-    box.textContent = out || "Код пуст...";
+    box.innerHTML = out || '<div style="color:var(--text-muted); padding:10px;">Код пуст...</div>';
 }
 
 function renderWatchTable() {
@@ -2880,24 +2887,15 @@ function switchLanguageTab(lang) {
     currentLang = lang;
     document.getElementById('btnLangAsm')?.classList.toggle('active', lang === 'asm');
     document.getElementById('btnLangC')?.classList.toggle('active', lang === 'c');
-    document.getElementById('btnLangDisasm')?.classList.toggle('active', lang === 'c_asm');
 
-    if (lang === 'c_asm') {
-        document.getElementById('editorTitle').textContent = '⚡ Листинг C ➔ ASM';
-        txtArea.readOnly = true;
-        if (cachedUserCCode) {
-            const compiled = compileCToAsm(cachedUserCCode);
-            txtArea.value = compiled.map(item => item.asm).join('\n');
-        }
+    txtArea.readOnly = false;
+    if (lang === 'c') {
+        document.getElementById('editorTitle').textContent = '⚡ Редактор (C)';
+        if (cachedUserCCode) txtArea.value = cachedUserCCode;
     } else {
-        txtArea.readOnly = false;
-        if (lang === 'c') {
-            document.getElementById('editorTitle').textContent = '⚡ Редактор (C)';
-            if (cachedUserCCode) txtArea.value = cachedUserCCode;
-        } else {
-            document.getElementById('editorTitle').textContent = '📝 Редактор (.asm)';
-        }
+        document.getElementById('editorTitle').textContent = '📝 Редактор (.asm)';
     }
+
     updateSyntax();
     cpuReset();
 }

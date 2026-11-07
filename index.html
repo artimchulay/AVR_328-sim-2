@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="app-container">
+    <div class="app-container" id="appContainer">
         
         <!-- =========================================================
              1. ВЕРХНЯЯ ШАПКА TOOLBAR (СТРОГО ОДНА ЛИНИЯ НА ПК)
@@ -20,12 +20,18 @@
                 <div class="logo">⚡ <span>AVR Studio</span></div>
                 <div class="select-wrapper">
                     <select id="exampleSelector" onchange="loadSelectedExample()">
-                        <!-- Программы на C -->
+                        <!-- Программы из Темы 6 (UART) -->
+                        <option value="c_uart_rx_led">⚡ C: Прием 'M' (USART_RX) ➔ Светодиод L (Тема 6)</option>
+                        <option value="asm_uart_tx_button">📝 ASM: Отправка '>' по кнопке INT0 (Тема 6)</option>
+                        <option value="asm_uart_flash_string">📝 ASM: Передача строки из Flash (LPM, UDRE) (Тема 6)</option>
+                        
+                        <!-- Другие программы на C -->
                         <option value="c_interrupt_int0">⚡ C: Внешнее прерывание INT0 (Кнопка K1)</option>
                         <option value="c_blink_counter">⚡ C: Мигающий светодиод L (Счетчик 800 000)</option>
                         <option value="c_zadanie5">⚡ C: Кнопки-переключатели светодиодов (PD2..PD4)</option>
                         <option value="c_example3">⚡ C: Кнопка включает светодиод L</option>
-                        <!-- Программы на ASM -->
+                        
+                        <!-- Другие программы на ASM -->
                         <option value="test_all" selected>📝 ASM: Комплексный тест: команды и флаги SREG</option>
                         <option value="led_running">📝 ASM: Бегущий огонёк (Порт D)</option>
                         <option value="uart_tx">📝 ASM: Отправка текста в терминал (UART)</option>
@@ -34,7 +40,7 @@
                 </div>
             </div>
 
-            <!-- Центральная зона: Кнопки управления CPU и скорость -->
+            <!-- Центральная зона: Кнопки управления CPU, скорость и ЗУМ -->
             <div class="toolbar-center">
                 <button type="button" id="btnStep" class="btn btn-step" onclick="cpuStep()" title="Один шаг (F11)">
                     <span>⏭</span> <span class="btn-text">Шаг</span>
@@ -50,11 +56,19 @@
                     <input type="range" id="speedRange" min="1" max="100" value="40" oninput="updateSpeed(this.value)">
                     <span id="speedVal">40 оп/с</span>
                 </div>
-                <!-- Счетчик тактов перенесен в верхнюю шапку -->
+
+                <!-- Масштабирование интерфейса 🔍- / 🔍+ -->
+                <div class="zoom-box" title="Масштаб интерфейса">
+                    <button type="button" class="btn-zoom" onclick="changeAppZoom(-0.1)" title="Уменьшить масштаб">🔍-</button>
+                    <span id="zoomVal" onclick="resetAppZoom()" title="Клик — сброс к 100%">100%</span>
+                    <button type="button" class="btn-zoom" onclick="changeAppZoom(0.1)" title="Увеличить масштаб">🔍+</button>
+                </div>
+
+                <!-- Счетчик тактов -->
                 <span class="cycle-badge" id="cycleCounter">Такты: 0</span>
             </div>
 
-            <!-- Правая зона: Кнопки колонок бок о бок -->
+            <!-- Правая зона: Кнопки колонок -->
             <nav class="nav-screens" id="panelNav">
                 <button type="button" class="nav-screen-btn active" id="tabBtn_editor" onclick="togglePanel('editor')">📝 Код</button>
                 <button type="button" class="nav-screen-btn active" id="tabBtn_board" onclick="togglePanel('board')">💡 Плата</button>
@@ -71,32 +85,37 @@
         </div>
 
         <!-- =========================================================
-             2. ОСНОВНАЯ ЗОНА: 5 КОЛОНОК БОК О БОК
+             2. ОСНОВНАЯ ЗОНА: 5 КОЛОНОК (С DRAG-AND-DROP)
              ========================================================= -->
         <main class="slider-viewport" id="sliderViewport">
             <div class="slider-track" id="panelsTrack">
                 
                 <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 1: РЕДАКТОР КОДА (С 3 РЕЖИМАМИ: ASM | C | C ➔ ASM)
+                     ПАНЕЛЬ 1: РЕДАКТОР КОДА (С КНОПКОЙ .HEX И 3 РЕЖИМАМИ)
                      --------------------------------------------------------- -->
-                <section class="slide-panel editor-slide" id="panel_editor">
-                    <div class="slide-header">
+                <section class="slide-panel editor-slide" id="panel_editor" data-panel-id="editor">
+                    <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
+                            <span class="drag-handle" title="Перетащить колонку">⠿</span>
                             <h2 id="editorTitle">📝 Редактор (.asm)</h2>
-                            <!-- Трехпозиционный переключатель языков -->
+                            
+                            <!-- Переключатель языков -->
                             <div class="lang-switch-btns">
-                                <button type="button" class="lang-btn active" id="btnLangAsm" onclick="setEditorLang('asm')">ASM</button>
-                                <button type="button" class="lang-btn" id="btnLangC" onclick="setEditorLang('c')">C</button>
-                                <button type="button" class="lang-btn" id="btnLangDisasm" onclick="setEditorLang('c_asm')" title="Показать сгенерированный ассемблер с бегающей стрелкой PC">C ➔ ASM</button>
+                                <button type="button" class="lang-btn active" id="btnLangAsm" onclick="switchLanguageTab('asm')">ASM</button>
+                                <button type="button" class="lang-btn" id="btnLangC" onclick="switchLanguageTab('c')">C</button>
+                                <button type="button" class="lang-btn" id="btnLangDisasm" onclick="switchLanguageTab('c_asm')" title="Показать сгенерированный ассемблер с бегающей стрелкой PC">C ➔ ASM</button>
                             </div>
+
                             <!-- Размер шрифта -->
                             <div class="font-size-btns">
                                 <button type="button" class="btn-icon" onclick="changeFontSize(-1)">A-</button>
                                 <span id="fontSizeVal">14px</span>
                                 <button type="button" class="btn-icon" onclick="changeFontSize(1)">A+</button>
                             </div>
-                            <!-- Сохранение / Загрузка файлов -->
-                            <button type="button" class="btn-icon" onclick="saveCodeToFile()" title="Сохранить файл на диск">💾</button>
+
+                            <!-- Сохранение / HEX / Загрузка -->
+                            <button type="button" class="btn-icon" onclick="saveCodeToFile()" title="Сохранить исходный код">💾</button>
+                            <button type="button" class="btn-hex" onclick="exportIntelHex()" title="Скомпилировать и скачать файл прошивки Intel HEX (.hex)">📦 .HEX</button>
                             <button type="button" class="btn-icon" onclick="document.getElementById('fileOpenerInput').click()" title="Открыть файл с диска">📂</button>
                             <input type="file" id="fileOpenerInput" style="display:none;" onchange="loadCodeFromFile(event)" accept=".c,.asm,.txt">
                             <button type="button" class="btn-mobile-tab" id="mobileTabBtn" onclick="applyGhostCompletion()" title="Применить автодополнение">⇥ Tab</button>
@@ -117,11 +136,14 @@
                 </section>
 
                 <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА (СО СВОРАЧИВАЕМЫМИ КАРТОЧКАМИ)
+                     ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА
                      --------------------------------------------------------- -->
-                <section class="slide-panel board-slide" id="panel_board">
-                    <div class="slide-header">
-                        <h2>💡 Интерактивная плата ввода-вывода</h2>
+                <section class="slide-panel board-slide" id="panel_board" data-panel-id="board">
+                    <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
+                        <div class="slide-header-left">
+                            <span class="drag-handle" title="Перетащить колонку">⠿</span>
+                            <h2>💡 Интерактивная плата ввода-вывода</h2>
+                        </div>
                         <button type="button" class="btn-mini btn-io-settings" onclick="openIoModal()">⚙️ Настройка I/O</button>
                     </div>
                     <div class="board-scroll-area">
@@ -229,38 +251,46 @@
                             </div>
                         </div>
 
-                        <!-- 7. Терминал UART -->
-                        <div class="board-card uart-card">
-                            <div class="uart-header">
-                                <div class="port-selector-btns">
-                                    <button type="button" class="port-btn active" id="btnTabUart" onclick="switchBoardBottomTab('uart')">Терминал UART (UDR0)</button>
-                                    <button type="button" class="port-btn" id="btnTabExtraPins" onclick="switchBoardBottomTab('extra')">Сигналы Порта C (A0..A5)</button>
+                        <!-- 7. Терминал UART (ТЕПЕРЬ СВОРАЧИВАЕМЫЙ!) -->
+                        <div class="board-card uart-card" id="card_uart">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_uart')">
+                                <div class="uart-header-left">
+                                    <div class="card-title">Терминал UART (UDR0)</div>
+                                    <div class="port-selector-btns" onclick="event.stopPropagation()">
+                                        <button type="button" class="port-btn active" id="btnTabUart" onclick="switchBoardBottomTab('uart')">Консоль</button>
+                                        <button type="button" class="port-btn" id="btnTabExtraPins" onclick="switchBoardBottomTab('extra')">Сигналы C</button>
+                                    </div>
                                 </div>
-                                <div style="display:flex; gap:6px;">
+                                <div style="display:flex; gap:6px; align-items:center;" onclick="event.stopPropagation()">
                                     <button type="button" class="btn-mini btn-serial-connect" id="btnWebSerial" onclick="connectRealWebSerial()">🌐 COM</button>
                                     <button type="button" class="btn-link" onclick="clearUart()">Очистить</button>
+                                    <span class="collapse-icon" id="card_uart_icon">▲</span>
                                 </div>
                             </div>
-                            <div id="viewUartConsole">
-                                <pre class="uart-console" id="uartTerminal">UART готов к работе...</pre>
-                                <div class="serial-send-row">
-                                    <input type="text" id="serialInput" placeholder="Отправить символ в UDR0..." onkeydown="if(event.key==='Enter') sendUartInput()">
-                                    <button type="button" class="btn btn-step" onclick="sendUartInput()">Отправить</button>
+                            <div class="card-collapsible-body">
+                                <div id="viewUartConsole">
+                                    <pre class="uart-console" id="uartTerminal">UART готов к работе...</pre>
+                                    <div class="serial-send-row">
+                                        <input type="text" id="serialInput" placeholder="Отправить символ/строку в UDR0..." onkeydown="if(event.key==='Enter') sendUartInput()">
+                                        <button type="button" class="btn btn-step" onclick="sendUartInput()">Отправить</button>
+                                    </div>
                                 </div>
-                            </div>
-                            <div id="viewExtraPins" style="display: none;">
-                                <div class="extra-pins-grid" id="extraPinsGrid"></div>
+                                <div id="viewExtraPins" style="display: none;">
+                                    <div class="extra-pins-grid" id="extraPinsGrid"></div>
+                                </div>
                             </div>
                         </div>
+
                     </div>
                 </section>
 
                 <!-- ---------------------------------------------------------
                      ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР
                      --------------------------------------------------------- -->
-                <section class="slide-panel analyzer-slide" id="panel_analyzer">
-                    <div class="slide-header">
+                <section class="slide-panel analyzer-slide" id="panel_analyzer" data-panel-id="analyzer">
+                    <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
+                            <span class="drag-handle" title="Перетащить колонку">⠿</span>
                             <h2>📊 Анализатор сигналов</h2>
                             <div class="quick-ch-btns">
                                 <button type="button" class="btn-mini" onclick="selectChannelPreset('d')">Все D</button>
@@ -287,9 +317,12 @@
                 <!-- ---------------------------------------------------------
                      ПАНЕЛЬ 4: РЕГИСТРЫ CPU И ПАМЯТЬ (+ FLASH И EEPROM)
                      --------------------------------------------------------- -->
-                <section class="slide-panel cpu-slide" id="panel_cpu">
-                    <div class="slide-header">
-                        <h2>⚙️ Регистры процессора и память</h2>
+                <section class="slide-panel cpu-slide" id="panel_cpu" data-panel-id="cpu">
+                    <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
+                        <div class="slide-header-left">
+                            <span class="drag-handle" title="Перетащить колонку">⠿</span>
+                            <h2>⚙️ Регистры процессора и память</h2>
+                        </div>
                     </div>
                     <div class="cpu-scroll-area">
                         <div class="cpu-subcard">
@@ -329,13 +362,39 @@
                 </section>
 
                 <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 5: ДОПОЛНИТЕЛЬНЫЕ ИНСТРУМЕНТЫ
+                     ПАНЕЛЬ 5: ДОПОЛНИТЕЛЬНЫЕ ИНСТРУМЕНТЫ (С УМНЫМ WATCH)
                      --------------------------------------------------------- -->
-                <section class="slide-panel tools-slide panel-hidden" id="panel_tools">
-                    <div class="slide-header">
-                        <h2>🧰 Дополнительные инструменты</h2>
+                <section class="slide-panel tools-slide panel-hidden" id="panel_tools" data-panel-id="tools">
+                    <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
+                        <div class="slide-header-left">
+                            <span class="drag-handle" title="Перетащить колонку">⠿</span>
+                            <h2>🧰 Дополнительные инструменты</h2>
+                        </div>
                     </div>
                     <div class="cpu-scroll-area">
+                        <!-- Умный наблюдатель за переменными (Smart Watch) -->
+                        <div class="cpu-subcard">
+                            <div class="watch-header-bar">
+                                <div class="card-title" style="margin-bottom:0;">Умный Watch (переменные C / регистры ASM)</div>
+                                <span class="badge-subtle" id="watchVarsCount">Переменных: 0</span>
+                            </div>
+                            <div class="watch-table-wrapper">
+                                <table class="watch-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Имя</th>
+                                            <th>Тип</th>
+                                            <th>Значение</th>
+                                            <th>HEX</th>
+                                            <th>BIN</th>
+                                            <th>Размещение</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="watchTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
                         <!-- Калькулятор систем счисления -->
                         <div class="cpu-subcard">
                             <div class="card-title">Калькулятор систем счисления (DEC / HEX / BIN)</div>
@@ -344,15 +403,6 @@
                                 <input type="text" id="convHex" placeholder="HEX (0xFF)" oninput="onConverterInput('hex')">
                                 <input type="text" id="convBin" placeholder="BIN (0b11111111)" oninput="onConverterInput('bin')">
                             </div>
-                        </div>
-
-                        <!-- Наблюдатель за переменными (Watch) -->
-                        <div class="cpu-subcard">
-                            <div class="card-title">Наблюдатель за переменными (Watch: R17..R24)</div>
-                            <table class="watch-table">
-                                <thead><tr><th>Регистр</th><th>Значение</th><th>HEX</th><th>BIN</th></tr></thead>
-                                <tbody id="watchTableBody"></tbody>
-                            </table>
                         </div>
 
                         <!-- Инспектор Си -> Ассемблер -->

@@ -1,5 +1,5 @@
 /* =========================================================
-   1. ПЕРЕМЕННЫЕ И ОБЩИЕ СТИЛИ (ТЕМНАЯ ТЕМА)
+   1. ПЕРЕМЕННЫЕ И ОБЩИЕ СТИЛИ (ТЕМНАЯ ТЕМА С ЗУМОМ)
    ========================================================= */
 
 :root {
@@ -14,6 +14,7 @@
     --accent-blue: #2979ff;
     --accent-gold: #ffb300;
     --accent-red: #ff3d00;
+    --accent-purple: #c084fc;
     
     --syn-op: #38bdf8;
     --syn-com: #4ade80;
@@ -28,6 +29,7 @@
     
     --code-font-size: 14px;
     --line-height: 22px;
+    --app-zoom: 1;
 }
 
 * { 
@@ -54,10 +56,12 @@ html, body {
     height: 100dvh;
     width: 100vw;
     overflow: hidden;
+    zoom: var(--app-zoom);
+    transition: zoom 0.15s ease-out;
 }
 
 /* =========================================================
-   2. ШАПКА TOOLBAR (СТРОГО ОДНА СТРОКА НА ПК, КАК НА ФОТО 2)
+   2. ШАПКА TOOLBAR (СТРОГО ОДНА ЛИНИЯ НА ПК)
    ========================================================= */
 
 .toolbar {
@@ -67,12 +71,12 @@ html, body {
     flex-shrink: 0;
     background: var(--panel-bg);
     border-bottom: 1px solid var(--border-color);
-    padding: 8px 14px;
+    padding: 7px 14px;
     display: flex;
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 10px;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
@@ -94,7 +98,7 @@ html, body {
 .logo span { color: var(--accent); }
 
 .select-wrapper {
-    max-width: 340px;
+    max-width: 350px;
 }
 .select-wrapper select {
     width: 100%;
@@ -103,7 +107,7 @@ html, body {
     border: 1px solid var(--border-color);
     padding: 6px 10px; 
     border-radius: 6px; 
-    font-size: 0.84em; 
+    font-size: 0.83em; 
     outline: none; 
     cursor: pointer;
     text-overflow: ellipsis;
@@ -149,9 +153,52 @@ html, body {
     user-select: none;
 }
 .speed-box input[type="range"] {
-    width: 60px;
+    width: 55px;
     accent-color: var(--accent);
     cursor: pointer;
+}
+
+/* Зум-контроллер в тулбаре */
+.zoom-box {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: #080a0f;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 2px 4px;
+    user-select: none;
+}
+.btn-zoom {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.74em;
+    font-weight: 800;
+    padding: 2px 5px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.btn-zoom:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.zoom-box span {
+    font-size: 0.74em;
+    font-family: var(--font-mono);
+    color: #38bdf8;
+    min-width: 38px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.cycle-badge {
+    background: #080a0f;
+    border: 1px solid var(--border-color);
+    color: var(--accent-blue);
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-size: 0.78em;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    white-space: nowrap;
 }
 
 .nav-screens {
@@ -195,7 +242,7 @@ html, body {
 .hint-text b { color: var(--accent-gold); }
 
 /* =========================================================
-   3. МУЛЬТИКОЛОНОЧНЫЙ ТРЕК (БОК О БОК)
+   3. МУЛЬТИКОЛОНОЧНЫЙ ТРЕК И DRAG-AND-DROP
    ========================================================= */
 
 .slider-viewport {
@@ -226,11 +273,22 @@ html, body {
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-    transition: opacity 0.15s ease;
+    transition: opacity 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
 .slide-panel.panel-hidden {
     display: none !important;
+}
+
+/* Стили перетаскивания (Drag-and-Drop) */
+.slide-panel.dragging {
+    opacity: 0.4;
+    border: 2px dashed var(--accent-blue) !important;
+    transform: scale(0.98);
+}
+.slide-panel.drag-over {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 16px rgba(0, 230, 118, 0.35);
 }
 
 .slide-header {
@@ -242,12 +300,27 @@ html, body {
     align-items: center; 
     flex-shrink: 0;
     gap: 8px;
+    cursor: grab;
+    user-select: none;
+}
+.slide-header:active {
+    cursor: grabbing;
 }
 .slide-header-left {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
+}
+.drag-handle {
+    color: #475569;
+    font-size: 1.1em;
+    cursor: grab;
+    line-height: 1;
+    margin-right: 2px;
+}
+.slide-header:hover .drag-handle {
+    color: var(--accent-blue);
 }
 .slide-header h2 {
     font-size: 0.88em;
@@ -257,7 +330,7 @@ html, body {
 }
 
 /* =========================================================
-   4. ПАНЕЛЬ 1: РЕДАКТОР, ДЕБАГГЕР И GHOST TEXT
+   4. ПАНЕЛЬ 1: РЕДАКТОР, ДЕБАГГЕР И КНОПКА .HEX
    ========================================================= */
 
 .lang-switch-btns {
@@ -310,6 +383,24 @@ html, body {
 }
 .btn-icon:hover { border-color: var(--accent-blue); }
 
+/* Специальная кнопка скачивания прошивки Intel HEX */
+.btn-hex {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(41, 121, 255, 0.25));
+    border: 1px solid var(--accent-purple);
+    color: #e9d5ff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.72em;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.btn-hex:hover {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.4), rgba(41, 121, 255, 0.4));
+    box-shadow: 0 0 10px rgba(192, 132, 252, 0.4);
+    color: #fff;
+}
+
 .btn-mobile-tab {
     display: none;
     background: rgba(56, 189, 248, 0.15);
@@ -341,6 +432,7 @@ html, body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: 140px;
 }
 .editor-status.has-error-text {
     color: #ff3d00 !important;
@@ -469,7 +561,6 @@ pre#highlighting {
     overflow: hidden;
 }
 
-/* Слой серой подсказки автодополнения Ghost Text */
 #ghostOverlay {
     background: transparent;
     color: transparent;
@@ -491,7 +582,7 @@ pre#highlighting {
 .syn-type { color: var(--syn-type); }
 
 /* =========================================================
-   5. ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА И I/O
+   5. ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА И СВОРАЧИВАНИЕ
    ========================================================= */
 
 .board-scroll-area {
@@ -508,6 +599,7 @@ pre#highlighting {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 10px;
+    transition: padding 0.15s ease;
 }
 .card-title {
     font-size: 0.84em;
@@ -519,6 +611,29 @@ pre#highlighting {
     font-size: 0.74em;
     color: var(--text-muted);
     margin-bottom: 8px;
+}
+
+/* Сворачиваемые карточки */
+.card-collapsible-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+.collapse-icon {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+.board-card.collapsed .card-collapsible-body {
+    display: none !important;
+}
+.board-card.collapsed .card-title {
+    margin-bottom: 0 !important;
+}
+.board-card.collapsed {
+    padding: 6px 10px !important;
 }
 
 .btn-matrix {
@@ -551,7 +666,6 @@ pre#highlighting {
 }
 .v-btn.latched span { color: #2d1800; font-weight: bold; }
 
-/* Пользовательские компоненты с яркой рамкой */
 .custom-io-card {
     border-color: rgba(255, 179, 0, 0.5) !important;
     background: #141a24 !important;
@@ -589,7 +703,6 @@ pre#highlighting {
     color: #cbd5e1;
 }
 
-/* Аналоговый потенциометр */
 .analog-card {
     border-color: rgba(56, 189, 248, 0.3) !important;
 }
@@ -616,7 +729,6 @@ pre#highlighting {
     cursor: pointer;
 }
 
-/* Светодиоды */
 .board-leds-row {
     display: flex;
     gap: 16px;
@@ -652,13 +764,6 @@ pre#highlighting {
     border-color: #fff !important;
 }
 
-/* Линейка портов */
-.port-header-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
 .port-selector-btns { display: flex; gap: 4px; }
 .port-btn {
     background: #11151f;
@@ -695,12 +800,14 @@ pre#highlighting {
     color: var(--text-muted);
 }
 
-/* Терминал UART и доп сигналы */
-.uart-header {
+/* Терминал UART (Сворачиваемый) */
+.uart-card {
+    border-color: rgba(56, 189, 248, 0.3) !important;
+}
+.uart-header-left {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    gap: 10px;
 }
 .btn-mini {
     background: #11151f;
@@ -742,7 +849,7 @@ pre#highlighting {
     height: 75px;
     overflow-y: auto;
     white-space: pre-wrap;
-    margin-bottom: 6px;
+    margin: 6px 0;
 }
 .serial-send-row { display: flex; gap: 6px; }
 .serial-send-row input {
@@ -765,8 +872,25 @@ pre#highlighting {
     padding: 8px 0;
 }
 
+.lcd-card {
+    background: #0d1a2d !important;
+    border-color: #1e3a8a !important;
+}
+.lcd-screen {
+    background: #0284c7;
+    color: #ffffff;
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+    font-weight: 700;
+    padding: 8px 12px;
+    border-radius: 4px;
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.5), 0 0 12px rgba(2, 132, 199, 0.4);
+    letter-spacing: 2px;
+}
+.lcd-line { white-space: pre; height: 20px; line-height: 20px; }
+
 /* =========================================================
-   6. ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР (ФИКСИРОВАННЫЙ БЛОК)
+   6. ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР
    ========================================================= */
 
 .analyzer-slide { display: flex; flex-direction: column; }
@@ -774,7 +898,7 @@ pre#highlighting {
     display: flex; 
     align-items: center; 
     gap: 4px;
-    flex-shrink: 0; /* Никогда не сжимается и не закрывается */
+    flex-shrink: 0;
 }
 .quick-ch-btns { display: flex; gap: 3px; }
 
@@ -909,7 +1033,79 @@ canvas#logicCanvas { display: block; }
 }
 
 /* =========================================================
-   8. МОДАЛЬНОЕ ОКНО КОНФИГУРАТОРА I/O
+   8. ПАНЕЛЬ 5: УМНЫЙ WATCH И ИНСТРУМЕНТЫ
+   ========================================================= */
+
+.watch-header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.badge-subtle {
+    font-size: 0.72em;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+.watch-table-wrapper {
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: #060910;
+}
+.watch-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76em;
+    font-family: var(--font-mono);
+}
+.watch-table th { 
+    color: var(--text-muted); 
+    text-align: left; 
+    padding: 6px 8px; 
+    background: #0d121c;
+    border-bottom: 1px solid var(--border-color); 
+    position: sticky;
+    top: 0;
+}
+.watch-table td { 
+    padding: 5px 8px; 
+    border-bottom: 1px solid rgba(255,255,255,0.04); 
+    color: #fff; 
+}
+.watch-type-badge {
+    color: var(--accent-purple);
+    font-weight: bold;
+    font-size: 0.9em;
+}
+.watch-loc-badge {
+    background: #141c2c;
+    border: 1px solid #2d3e5f;
+    color: #93c5fd;
+    padding: 1px 4px;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+.converter-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+.converter-grid input {
+    background: #080a0f;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: #38bdf8;
+    padding: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    outline: none;
+}
+
+/* =========================================================
+   9. МОДАЛЬНОЕ ОКНО КОНФИГУРАТОРА I/O
    ========================================================= */
 
 .modal-backdrop {
@@ -1003,7 +1199,7 @@ canvas#logicCanvas { display: block; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* =========================================================
-   9. АДАПТИВНОСТЬ: СМАРТФОНЫ (< 900px)
+   10. АДАПТИВНОСТЬ ДЛЯ СМАРТФОНОВ (< 900px)
    ========================================================= */
 
 @media (max-width: 900px) {
@@ -1030,7 +1226,7 @@ canvas#logicCanvas { display: block; }
 
     .btn-text { display: none; }
     .btn { padding: 6px 10px; }
-    .speed-box input[type="range"] { width: 48px; }
+    .speed-box input[type="range"] { width: 45px; }
 
     .btn-mobile-tab { display: inline-block; }
 
@@ -1056,94 +1252,8 @@ canvas#logicCanvas { display: block; }
     .registers-grid {
         grid-template-columns: repeat(2, 1fr);
     }
-}
-/* Бейдж счетчика тактов в верхней шапке */
-.cycle-badge {
-    background: #080a0f;
-    border: 1px solid var(--border-color);
-    color: var(--accent-blue);
-    padding: 3px 8px;
-    border-radius: 5px;
-    font-size: 0.78em;
-    font-family: var(--font-mono);
-    font-weight: 700;
-    white-space: nowrap;
-}
 
-/* Защита от наезжания текста на корзину 🗑️ */
-.editor-status {
-    max-width: 140px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.slide-header-left {
-    flex-wrap: nowrap;
-    overflow: hidden;
-}
-/* Виртуальный дисплей LCD 1602 */
-.lcd-card {
-    background: #0d1a2d !important;
-    border-color: #1e3a8a !important;
-}
-.lcd-screen {
-    background: #0284c7;
-    color: #ffffff;
-    font-family: var(--font-mono);
-    font-size: 0.95em;
-    font-weight: 700;
-    padding: 8px 12px;
-    border-radius: 4px;
-    box-shadow: inset 0 0 10px rgba(0,0,0,0.5), 0 0 12px rgba(2, 132, 199, 0.4);
-    letter-spacing: 2px;
-}
-.lcd-line { white-space: pre; height: 20px; line-height: 20px; }
-
-/* Калькулятор и таблица Watch */
-.converter-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
-}
-.converter-grid input {
-    background: #080a0f;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: #38bdf8;
-    padding: 6px;
-    font-family: var(--font-mono);
-    font-size: 0.8em;
-    outline: none;
-}
-.watch-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.76em;
-    font-family: var(--font-mono);
-}
-.watch-table th { color: var(--text-muted); text-align: left; padding: 4px; border-bottom: 1px solid var(--border-color); }
-.watch-table td { padding: 4px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #fff; }
-
-/* Сворачиваемые карточки платы */
-.card-collapsible-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    cursor: pointer;
-    user-select: none;
-}
-.collapse-icon {
-    font-size: 0.75em;
-    color: var(--text-muted);
-    transition: transform 0.2s ease;
-}
-.board-card.collapsed .card-collapsible-body {
-    display: none !important;
-}
-.board-card.collapsed .card-title {
-    margin-bottom: 0 !important;
-}
-.board-card.collapsed {
-    padding: 6px 10px !important;
+    .drag-handle {
+        display: none;
+    }
 }

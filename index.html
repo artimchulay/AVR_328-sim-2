@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
     <title>AVR ATmega328P Studio & Logic Analyzer</title>
-    <!-- Векторная иконка чипа AVR -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='14' y='14' width='36' height='36' rx='4' fill='%231e293b' stroke='%2300e676' stroke-width='2'/%3E%3Ccircle cx='20' cy='20' r='2' fill='%2300e676'/%3E%3Ctext x='32' y='36' font-size='10' font-family='monospace' font-weight='bold' fill='%23f1f5f9' text-anchor='middle'%3EAVR%3C/text%3E%3Cpath d='M6 22h8M6 32h8M6 42h8M50 22h8M50 32h8M50 42h8M22 6v8M32 6v8M42 6v8M22 50v8M32 50v8M42 50v8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -12,7 +11,7 @@
     <div class="app-container" id="appContainer">
         
         <!-- =========================================================
-             1. ВЕРХНЯЯ ШАПКА TOOLBAR (СТРОГО ОДНА ЛИНИЯ НА ПК)
+             1. ВЕРХНЯЯ ШАПКА TOOLBAR
              ========================================================= -->
         <header class="toolbar" id="mainToolbar">
             <!-- Левая зона: Логотип и выбор программы -->
@@ -31,7 +30,7 @@
                         <option value="c_zadanie5">⚡ C: Кнопки-переключатели светодиодов (PD2..PD4)</option>
                         <option value="c_example3">⚡ C: Кнопка включает светодиод L</option>
                         
-                        <!-- Другие программы на ASM -->
+                        <!-- Программы на ASM -->
                         <option value="test_all" selected>📝 ASM: Комплексный тест: команды и флаги SREG</option>
                         <option value="led_running">📝 ASM: Бегущий огонёк (Порт D)</option>
                         <option value="uart_tx">📝 ASM: Отправка текста в терминал (UART)</option>
@@ -40,31 +39,53 @@
                 </div>
             </div>
 
-            <!-- Центральная зона: Кнопки управления CPU, скорость и ЗУМ -->
+            <!-- Центральная зона: Управление CPU + Файлы + Зум -->
             <div class="toolbar-center">
-                <button type="button" id="btnStep" class="btn btn-step" onclick="cpuStep()" title="Один шаг (F11)">
-                    <span>⏭</span> <span class="btn-text">Шаг</span>
-                </button>
-                <button type="button" id="btnRun" class="btn btn-run" onclick="toggleRun()" title="Пуск / Пауза">
-                    <span id="runIcon">▶</span> <span id="runText" class="btn-text">Пуск</span>
-                </button>
-                <button type="button" id="btnReset" class="btn btn-reset" onclick="cpuReset()" title="Сброс контроллера">
-                    <span>🔄</span> <span class="btn-text">Сброс</span>
-                </button>
-                
+                <!-- Группа симуляции -->
+                <div class="btn-group">
+                    <button type="button" id="btnStep" class="btn btn-step" onclick="cpuStep()" title="Один шаг (F11)">
+                        <span>⏭</span> <span class="btn-text">Шаг</span>
+                    </button>
+                    <button type="button" id="btnRun" class="btn btn-run" onclick="toggleRun()" title="Пуск / Пауза">
+                        <span id="runIcon">▶</span> <span id="runText" class="btn-text">Пуск</span>
+                    </button>
+                    <button type="button" id="btnReset" class="btn btn-reset" onclick="cpuReset()" title="Сброс контроллера">
+                        <span>🔄</span> <span class="btn-text">Сброс</span>
+                    </button>
+                </div>
+
+                <!-- Разделитель с отступом от случайных кликов -->
+                <div class="toolbar-divider"></div>
+
+                <!-- Группа работы с файлами (перенесена наверх) -->
+                <div class="btn-group">
+                    <button type="button" class="btn btn-file" onclick="saveCodeToFile()" title="Сохранить исходный код на диск">
+                        💾 <span class="btn-text">Сохранить</span>
+                    </button>
+                    <button type="button" class="btn btn-file" onclick="document.getElementById('fileOpenerInput').click()" title="Открыть файл с диска">
+                        📂 <span class="btn-text">Открыть</span>
+                    </button>
+                    <input type="file" id="fileOpenerInput" style="display:none;" onchange="loadCodeFromFile(event)" accept=".c,.asm,.txt">
+                    <button type="button" class="btn btn-hex-top" onclick="exportIntelHex()" title="Скомпилировать и скачать файл прошивки Intel HEX (.hex)">
+                        📦 .HEX
+                    </button>
+                </div>
+
+                <div class="toolbar-divider"></div>
+
+                <!-- Скорость симуляции -->
                 <div class="speed-box" title="Скорость симуляции">
                     <input type="range" id="speedRange" min="1" max="100" value="40" oninput="updateSpeed(this.value)">
                     <span id="speedVal">40 оп/с</span>
                 </div>
 
-                <!-- Масштабирование интерфейса 🔍- / 🔍+ -->
-                <div class="zoom-box" title="Масштаб интерфейса">
+                <!-- Масштабирование окна -->
+                <div class="zoom-box" title="Масштаб страницы">
                     <button type="button" class="btn-zoom" onclick="changeAppZoom(-0.1)" title="Уменьшить масштаб">🔍-</button>
                     <span id="zoomVal" onclick="resetAppZoom()" title="Клик — сброс к 100%">100%</span>
                     <button type="button" class="btn-zoom" onclick="changeAppZoom(0.1)" title="Увеличить масштаб">🔍+</button>
                 </div>
 
-                <!-- Счетчик тактов -->
                 <span class="cycle-badge" id="cycleCounter">Такты: 0</span>
             </div>
 
@@ -85,39 +106,31 @@
         </div>
 
         <!-- =========================================================
-             2. ОСНОВНАЯ ЗОНА: 5 КОЛОНОК (С DRAG-AND-DROP)
+             2. ОСНОВНАЯ ЗОНА: 5 КОЛОНОК
              ========================================================= -->
         <main class="slider-viewport" id="sliderViewport">
             <div class="slider-track" id="panelsTrack">
                 
-                <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 1: РЕДАКТОР КОДА (С КНОПКОЙ .HEX И 3 РЕЖИМАМИ)
-                     --------------------------------------------------------- -->
+                <!-- ПАНЕЛЬ 1: РЕДАКТОР КОДА -->
                 <section class="slide-panel editor-slide" id="panel_editor" data-panel-id="editor">
                     <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
                             <span class="drag-handle" title="Перетащить колонку">⠿</span>
                             <h2 id="editorTitle">📝 Редактор (.asm)</h2>
                             
-                            <!-- Переключатель языков -->
+                            <!-- Переключатель ASM и C (C->ASM убрана в инструменты) -->
                             <div class="lang-switch-btns">
                                 <button type="button" class="lang-btn active" id="btnLangAsm" onclick="switchLanguageTab('asm')">ASM</button>
                                 <button type="button" class="lang-btn" id="btnLangC" onclick="switchLanguageTab('c')">C</button>
-                                <button type="button" class="lang-btn" id="btnLangDisasm" onclick="switchLanguageTab('c_asm')" title="Показать сгенерированный ассемблер с бегающей стрелкой PC">C ➔ ASM</button>
                             </div>
 
-                            <!-- Размер шрифта -->
+                            <!-- Размер шрифта редактора -->
                             <div class="font-size-btns">
                                 <button type="button" class="btn-icon" onclick="changeFontSize(-1)">A-</button>
                                 <span id="fontSizeVal">14px</span>
                                 <button type="button" class="btn-icon" onclick="changeFontSize(1)">A+</button>
                             </div>
 
-                            <!-- Сохранение / HEX / Загрузка -->
-                            <button type="button" class="btn-icon" onclick="saveCodeToFile()" title="Сохранить исходный код">💾</button>
-                            <button type="button" class="btn-hex" onclick="exportIntelHex()" title="Скомпилировать и скачать файл прошивки Intel HEX (.hex)">📦 .HEX</button>
-                            <button type="button" class="btn-icon" onclick="document.getElementById('fileOpenerInput').click()" title="Открыть файл с диска">📂</button>
-                            <input type="file" id="fileOpenerInput" style="display:none;" onchange="loadCodeFromFile(event)" accept=".c,.asm,.txt">
                             <button type="button" class="btn-mobile-tab" id="mobileTabBtn" onclick="applyGhostCompletion()" title="Применить автодополнение">⇥ Tab</button>
                             <button type="button" class="btn-clear-code" onclick="clearEditor()" title="Очистить редактор">🗑️</button>
                         </div>
@@ -135,9 +148,7 @@
                     </div>
                 </section>
 
-                <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА
-                     --------------------------------------------------------- -->
+                <!-- ПАНЕЛЬ 2: ИНТЕРАКТИВНАЯ ПЛАТА -->
                 <section class="slide-panel board-slide" id="panel_board" data-panel-id="board">
                     <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
@@ -147,8 +158,7 @@
                         <button type="button" class="btn-mini btn-io-settings" onclick="openIoModal()">⚙️ Настройка I/O</button>
                     </div>
                     <div class="board-scroll-area">
-                        
-                        <!-- 1. Текстовый дисплей LCD 1602 (Сворачиваемый) -->
+                        <!-- 1. Текстовый дисплей LCD 1602 -->
                         <div class="board-card lcd-card" id="card_lcd">
                             <div class="card-collapsible-header" onclick="toggleCardCollapse('card_lcd')">
                                 <div class="card-title">Текстовый дисплей LCD 1602 (HD44780)</div>
@@ -165,7 +175,7 @@
                             </div>
                         </div>
 
-                        <!-- 2. Кнопочный модуль K1..K8 (Сворачиваемый) -->
+                        <!-- 2. Кнопочный модуль K1..K8 -->
                         <div class="board-card" id="card_buttons">
                             <div class="card-collapsible-header" onclick="toggleCardCollapse('card_buttons')">
                                 <div class="card-title">Кнопочный модуль (INT0, INT1, PCINT)</div>
@@ -192,7 +202,7 @@
                             <div class="custom-components-grid" id="customComponentsGrid"></div>
                         </div>
 
-                        <!-- 4. Светодиоды платы (Сворачиваемые) -->
+                        <!-- 4. Светодиоды платы -->
                         <div class="board-card" id="card_leds">
                             <div class="card-collapsible-header" onclick="toggleCardCollapse('card_leds')">
                                 <div class="card-title">Светодиоды платы [L, TX, RX]</div>
@@ -207,7 +217,7 @@
                             </div>
                         </div>
 
-                        <!-- 5. Аналоговый потенциометр (Сворачиваемый) -->
+                        <!-- 5. Аналоговый потенциометр -->
                         <div class="board-card analog-card" id="card_pot">
                             <div class="card-collapsible-header" onclick="toggleCardCollapse('card_pot')">
                                 <div class="card-title">Аналоговый потенциометр (Тема 7)</div>
@@ -224,7 +234,7 @@
                             </div>
                         </div>
 
-                        <!-- 6. Линейка портов (Сворачиваемая) -->
+                        <!-- 6. Линейка портов -->
                         <div class="board-card" id="card_port_leds">
                             <div class="card-collapsible-header" onclick="toggleCardCollapse('card_port_leds')">
                                 <div class="card-title" id="ledPortTitle">Линейка светодиодов (Порт D)</div>
@@ -251,7 +261,7 @@
                             </div>
                         </div>
 
-                        <!-- 7. Терминал UART (ТЕПЕРЬ СВОРАЧИВАЕМЫЙ!) -->
+                        <!-- 7. Терминал UART -->
                         <div class="board-card uart-card" id="card_uart">
                             <div class="card-collapsible-header" onclick="toggleCardCollapse('card_uart')">
                                 <div class="uart-header-left">
@@ -280,13 +290,10 @@
                                 </div>
                             </div>
                         </div>
-
                     </div>
                 </section>
 
-                <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР
-                     --------------------------------------------------------- -->
+                <!-- ПАНЕЛЬ 3: ЛОГИЧЕСКИЙ АНАЛИЗАТОР -->
                 <section class="slide-panel analyzer-slide" id="panel_analyzer" data-panel-id="analyzer">
                     <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
@@ -314,9 +321,7 @@
                     </div>
                 </section>
 
-                <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 4: РЕГИСТРЫ CPU И ПАМЯТЬ (+ FLASH И EEPROM)
-                     --------------------------------------------------------- -->
+                <!-- ПАНЕЛЬ 4: РЕГИСТРЫ CPU И ПАМЯТЬ -->
                 <section class="slide-panel cpu-slide" id="panel_cpu" data-panel-id="cpu">
                     <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
@@ -361,9 +366,7 @@
                     </div>
                 </section>
 
-                <!-- ---------------------------------------------------------
-                     ПАНЕЛЬ 5: ДОПОЛНИТЕЛЬНЫЕ ИНСТРУМЕНТЫ (С УМНЫМ WATCH)
-                     --------------------------------------------------------- -->
+                <!-- ПАНЕЛЬ 5: ДОПОЛНИТЕЛЬНЫЕ ИНСТРУМЕНТЫ (СВОРАЧИВАЕМЫЕ КАРТОЧКИ) -->
                 <section class="slide-panel tools-slide panel-hidden" id="panel_tools" data-panel-id="tools">
                     <div class="slide-header" draggable="true" title="Зажмите и перетащите для смены порядка колонок">
                         <div class="slide-header-left">
@@ -372,43 +375,62 @@
                         </div>
                     </div>
                     <div class="cpu-scroll-area">
-                        <!-- Умный наблюдатель за переменными (Smart Watch) -->
-                        <div class="cpu-subcard">
-                            <div class="watch-header-bar">
-                                <div class="card-title" style="margin-bottom:0;">Умный Watch (переменные C / регистры ASM)</div>
-                                <span class="badge-subtle" id="watchVarsCount">Переменных: 0</span>
+                        <!-- 1. Умный Watch (Сворачиваемый) -->
+                        <div class="board-card" id="card_watch">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_watch')">
+                                <div class="watch-header-bar" style="width:100%; margin-bottom:0;">
+                                    <div class="card-title">Умный Watch (переменные C / регистры ASM)</div>
+                                    <div style="display:flex; gap:8px; align-items:center;">
+                                        <span class="badge-subtle" id="watchVarsCount">Переменных: 0</span>
+                                        <span class="collapse-icon" id="card_watch_icon">▲</span>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="watch-table-wrapper">
-                                <table class="watch-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Имя</th>
-                                            <th>Тип</th>
-                                            <th>Значение</th>
-                                            <th>HEX</th>
-                                            <th>BIN</th>
-                                            <th>Размещение</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="watchTableBody"></tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- Калькулятор систем счисления -->
-                        <div class="cpu-subcard">
-                            <div class="card-title">Калькулятор систем счисления (DEC / HEX / BIN)</div>
-                            <div class="converter-grid">
-                                <input type="text" id="convDec" placeholder="DEC (255)" oninput="onConverterInput('dec')">
-                                <input type="text" id="convHex" placeholder="HEX (0xFF)" oninput="onConverterInput('hex')">
-                                <input type="text" id="convBin" placeholder="BIN (0b11111111)" oninput="onConverterInput('bin')">
+                            <div class="card-collapsible-body">
+                                <div class="watch-table-wrapper">
+                                    <table class="watch-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Имя</th>
+                                                <th>Тип</th>
+                                                <th>Значение</th>
+                                                <th>HEX</th>
+                                                <th>BIN</th>
+                                                <th>Размещение</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="watchTableBody"></tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Инспектор Си -> Ассемблер -->
-                        <div class="cpu-subcard">
-                            <div class="card-title">Инспектор Си ➔ Ассемблер (с текущей строкой PC)</div>
-                            <pre class="dump-view-wide" id="asmInspectorCode" style="height:140px;"></pre>
+                        <!-- 2. Калькулятор систем счисления (Сворачиваемый) -->
+                        <div class="board-card" id="card_calc">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_calc')">
+                                <div class="card-title">Калькулятор систем счисления (DEC / HEX / BIN)</div>
+                                <span class="collapse-icon" id="card_calc_icon">▲</span>
+                            </div>
+                            <div class="card-collapsible-body">
+                                <div class="converter-grid">
+                                    <input type="text" id="convDec" placeholder="DEC (255)" oninput="onConverterInput('dec')">
+                                    <input type="text" id="convHex" placeholder="HEX (0xFF)" oninput="onConverterInput('hex')">
+                                    <input type="text" id="convBin" placeholder="BIN (0b11111111)" oninput="onConverterInput('bin')">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. Инспектор Си ➔ Ассемблер с подсветкой и стрелкой PC (Сворачиваемый) -->
+                        <div class="board-card" id="card_inspector">
+                            <div class="card-collapsible-header" onclick="toggleCardCollapse('card_inspector')">
+                                <div class="card-title">Инспектор Си ➔ Ассемблер (с текущей строкой PC)</div>
+                                <span class="collapse-icon" id="card_inspector_icon">▲</span>
+                            </div>
+                            <div class="card-collapsible-body">
+                                <div class="inspector-code-box" id="asmInspectorCode">
+                                    <!-- Генерируется динамически с подсветкой синтаксиса -->
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>

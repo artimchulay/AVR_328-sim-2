@@ -865,16 +865,37 @@ function drawLogicAnalyzer() {
 }
 
 /* ================= 10. КОМПИЛЯТОР MICRO-C ================= */
-
 const AVR_CONSTS = {
+    // Внешние прерывания и таймеры
     ISC00: 0, ISC01: 1, ISC10: 2, ISC11: 3,
     INT0: 0, INT1: 1, PCIE0: 0, PCIE1: 1, PCIE2: 2,
+    
+    // UART
     TXEN0: 3, RXEN0: 4, UDRIE0: 5, TXCIE0: 6, RXCIE0: 7,
-    UCSZ00: 1, UCSZ01: 2, UCSZ02: 2,
-    PORTD0: 0, PORTD1: 1, PORTD2: 2, PORTD3: 3, PORTD4: 4, PORTD5: 5, PORTD6: 6, PORTD7: 7,
-    PORTB0: 0, PORTB1: 1, PORTB2: 2, PORTB3: 3, PORTB4: 4, PORTB5: 5, PORTB6: 6, PORTB7: 7,
+    UCSZ00: 1, UCSZ01: 2, UCSZ02: 2, U2X0: 1, DOR0: 3, FE0: 4, UDRE0: 5, TXC0: 6, RXC0: 7,
+
+    // Порт D: пины, выходы (PORT) и регистры направления (DDR), входы (PIN)
     PD0: 0, PD1: 1, PD2: 2, PD3: 3, PD4: 4, PD5: 5, PD6: 6, PD7: 7,
-    PB0: 0, PB1: 1, PB2: 2, PB3: 3, PB4: 4, PB5: 5, PB6: 6, PB7: 7
+    PORTD0: 0, PORTD1: 1, PORTD2: 2, PORTD3: 3, PORTD4: 4, PORTD5: 5, PORTD6: 6, PORTD7: 7,
+    DDD0: 0, DDD1: 1, DDD2: 2, DDD3: 3, DDD4: 4, DDD5: 5, DDD6: 6, DDD7: 7,
+    PIND0: 0, PIND1: 1, PIND2: 2, PIND3: 3, PIND4: 4, PIND5: 5, PIND6: 6, PIND7: 7,
+
+    // Порт B: пины, выходы (PORT), регистры направления (DDR), входы (PIN)
+    PB0: 0, PB1: 1, PB2: 2, PB3: 3, PB4: 4, PB5: 5, PB6: 6, PB7: 7,
+    PORTB0: 0, PORTB1: 1, PORTB2: 2, PORTB3: 3, PORTB4: 4, PORTB5: 5, PORTB6: 6, PORTB7: 7,
+    DDB0: 0, DDB1: 1, DDB2: 2, DDB3: 3, DDB4: 4, DDB5: 5, DDB6: 6, DDB7: 7,
+    PINB0: 0, PINB1: 1, PINB2: 2, PINB3: 3, PINB4: 4, PINB5: 5, PINB6: 6, PINB7: 7,
+
+    // Порт C: пины, выходы (PORT), регистры направления (DDR), входы (PIN)
+    PC0: 0, PC1: 1, PC2: 2, PC3: 3, PC4: 4, PC5: 5, PC6: 6, PC7: 7,
+    PORTC0: 0, PORTC1: 1, PORTC2: 2, PORTC3: 3, PORTC4: 4, PORTC5: 5, PORTC6: 6, PORTC7: 7,
+    DDC0: 0, DDC1: 1, DDC2: 2, DDC3: 3, DDC4: 4, DDC5: 5, DDC6: 6, DDC7: 7,
+    PINC0: 0, PINC1: 1, PINC2: 2, PINC3: 3, PINC4: 4, PINC5: 5, PINC6: 6, PINC7: 7,
+
+    // АЦП и Компаратор
+    ACD: 7, ACBG: 6, ACO: 5, ACI: 4, ACIE: 3, ACIC: 2, ACIS1: 1, ACIS0: 0,
+    ADEN: 7, ADSC: 6, ADATE: 5, ADIF: 4, ADIE: 3, ADPS2: 2, ADPS1: 1, ADPS0: 0,
+    REFS1: 7, REFS0: 6, ADLAR: 5
 };
 
 function evaluateCExpression(expr, defines) {

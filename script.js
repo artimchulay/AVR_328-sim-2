@@ -1,10 +1,10 @@
 
 /* ==========================================================================
-   AVR ATmega328P Studio & Logic Analyzer Engine (script.js) - OPTIMIZED
-   - Pre-decoded Fast Execution Engine (Байткод-оптимизация)
-   - Поддержка нескольких команд на одной строке (через ':' в ASM и ';' в C)
-   - Dirty-checking DOM & requestAnimationFrame Canvas
-   - 100% сохранение всех модулей: LCD, COM, ADC, HEX, Smart Watch
+   AVR ATmega328P Studio & Logic Analyzer Engine (script.js) - FIXED & TESTED
+   - Полная поддержка sbrc / sbrs / sbis / sbic (кнопки и условия Си)
+   - Исправленный порядок аргументов для 'in' и 'out'
+   - Поддержка растягивания карточек инструментов (toggleCardFullscreen)
+   - Полноэкранный зум, Intel HEX, Smart Watch, LCD, COM
    ========================================================================== */
 
 /* ================= 1. КАРТА РЕГИСТРОВ И ВЕКТОРОВ ================= */
@@ -48,10 +48,10 @@ const CYCLES = {
     and: 1, andi: 1, or: 1, ori: 1, eor: 1, com: 1, neg: 1, inc: 1, dec: 1,
     tst: 1, clr: 1, ser: 1, in: 1, out: 1, sec: 1, clc: 1, sez: 1, clz: 1,
     sen: 1, cln: 1, sev: 1, clv: 1, ses: 1, cls: 1, seh: 1, clh: 1, set: 1, clt: 1,
-    sei: 1, cli: 1, sbi: 2, cbi: 2, sbis: 1, sbic: 1, bst: 1, bld: 1, lpm: 3,
+    sei: 1, cli: 1, sbi: 2, cbi: 2, sbis: 1, sbic: 1, sbrs: 1, sbrc: 1, bst: 1, bld: 1, lpm: 3,
     mul: 2, muls: 2,
     lsl: 1, lsr: 1, asr: 1, rol: 1, ror: 1, cp: 1, cpc: 1, cpi: 1, cpse: 1,
-    adiw: 2, sbiw: 2, sbrs: 1, sbrc: 1, rjmp: 2, jmp: 3, call: 4, ret: 4, reti: 4,
+    adiw: 2, sbiw: 2, rjmp: 2, jmp: 3, call: 4, ret: 4, reti: 4,
     lds: 2, sts: 2, ld: 1, st: 1, push: 2, pop: 2,
     breq: 1, brne: 1, brcs: 1, brcc: 1, brlo: 1, brsh: 1,
     brmi: 1, brpl: 1, brge: 1, brlt: 1, brhs: 1, brhc: 1, brts: 1, brtc: 1,
@@ -125,9 +125,6 @@ const defaultButtons = [
 
 let vButtons = [...defaultButtons];
 let customIoComponents = [];
-
-// Кэш ссылок DOM для устранения фризов
-let domCache = {};
 
 /* ================= 3. ЗУМ И ИНТЕРФЕЙС ================= */
 
@@ -209,7 +206,6 @@ function toggleCardFullscreen(cardId) {
     const btn = document.getElementById('btnMax_' + cardId);
     if (!card || !panel) return;
 
-    // Если карточка была свернута — раскрываем её
     if (card.classList.contains('collapsed')) {
         toggleCardCollapse(cardId);
     }
@@ -376,7 +372,6 @@ function validateSourceCode(text, lang) {
             line = line.trim();
             if (!line || line.startsWith('.')) continue;
 
-            // Поддержка проверки нескольких команд на одной строке через ':'
             const subCmds = line.split(':').map(c => c.trim()).filter(Boolean);
             for (let sub of subCmds) {
                 if (sub.endsWith(':') || !sub) continue;
@@ -430,6 +425,7 @@ const DICT_ASM = [
     '.include "m328pdef.inc"', '.org 0x0000', '.org 0x0002', '.org 0x0024', '.cseg', '.db',
     'ldi', 'mov', 'add', 'adc', 'sub', 'subi', 'rjmp', 'jmp', 'call', 'ret', 'reti',
     'in', 'out', 'sts', 'lds', 'lpm', 'bst', 'brtc', 'brts', 'cpi', 'breq', 'brne',
+    'sbrc', 'sbrs', 'sbic', 'sbis', 'sbi', 'cbi',
     'sei', 'cli', 'nop', 'break', 'low(Msg<<1)', 'high(Msg<<1)',
     ...COMMON_REGISTERS
 ];
@@ -996,6 +992,29 @@ function compileCToAsm(cCode) {
         if (line.includes('sei()')) { asmList.push({ asm: 'sei', lineNum }); continue; }
         if (line.includes('cli()')) { asmList.push({ asm: 'cli', lineNum }); continue; }
 
+        const delayMatch = line.match(/_delay_ms\s*\(\s*([0-9]+)\s*\);/);
+        if (delayMatch) {
+            const lblDelay = '__delay_loop_' + (labelCounter++);
+            asmList.push({ asm: 'ldi r24, 2', lineNum });
+            asmList.push({ asm: lblDelay + ':', lineNum });
+            asmList.push({ asm: 'dec r24', lineNum });
+            asmList.push({ asm: 'brne ' + lblDelay, lineNum });
+            continue;
+        }
+
+        // Опрос кнопок в while (ожидание отпускания)
+        if (line.startsWith('while') && line.includes('PIN')) {
+            const pinInfo = extractPinAndBit(line);
+            if (pinInfo) {
+                const lblWait = '__wait_release_' + (labelCounter++);
+                asmList.push({ asm: lblWait + ':', lineNum });
+                asmList.push({ asm: 'in r16, ' + pinInfo.port, lineNum });
+                asmList.push({ asm: 'sbrs r16, ' + pinInfo.bit, lineNum });
+                asmList.push({ asm: 'rjmp ' + lblWait, lineNum });
+                continue;
+            }
+        }
+
         if (line === '}' || line.startsWith('}')) {
             if (controlStack.length > 0) {
                 const top = controlStack[controlStack.length - 1];
@@ -1032,7 +1051,7 @@ function compileCToAsm(cCode) {
         }
         if (line === '{') continue;
 
-        // Объявления переменных (поддержка uint8_t, int, uint32_t)
+        // Объявления переменных
         const declMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int|char)\s+([^;]+);/);
         if (declMatch) {
             const typeName = declMatch[1];
@@ -1085,6 +1104,17 @@ function compileCToAsm(cCode) {
             continue;
         }
 
+        const portXorMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD)\s*\^\=\s*([^;]+);/);
+        if (portXorMatch) {
+            const portName = portXorMatch[1];
+            const mask = evaluateCExpression(applyDefines(portXorMatch[2]), defines) & 0xFF;
+            asmList.push({ asm: 'in r16, ' + portName, lineNum });
+            asmList.push({ asm: 'ldi r17, ' + mask, lineNum });
+            asmList.push({ asm: 'eor r16, r17', lineNum });
+            asmList.push({ asm: 'out ' + portName + ', r16', lineNum });
+            continue;
+        }
+
         // Присваивания
         const assignMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
         if (assignMatch) {
@@ -1122,7 +1152,21 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Ветвление if (data == 'M') или if (x >= 200) с БЕЗЗНАКОВЫМИ ПЕРЕХОДАМИ
+        // Опрос кнопок в if (!PIND) или if ((PINB & 1) == 0)
+        if (line.startsWith('if') && line.includes('PIN')) {
+            const pinInfo = extractPinAndBit(line);
+            if (pinInfo) {
+                const lblFalse = '__lbl_false_' + (labelCounter++);
+                const lblEnd = '__lbl_end_' + (labelCounter++);
+                asmList.push({ asm: 'in r16, ' + pinInfo.port, lineNum });
+                asmList.push({ asm: 'sbrc r16, ' + pinInfo.bit, lineNum });
+                asmList.push({ asm: 'rjmp ' + lblFalse, lineNum });
+                controlStack.push({ type: 'if', lblFalse, lblEnd });
+                continue;
+            }
+        }
+
+        // Ветвление if (data == 'M') или if (x >= 200)
         const ifMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^)]+)\)/);
         if (ifMatch) {
             const vName = ifMatch[1];
@@ -1178,7 +1222,7 @@ function compileCToAsm(cCode) {
     return asmList;
 }
 
-/* ================= 11. ОПТИМИЗИРОВАННЫЙ ПАРСЕР И БАЙТКОД ASM ================= */
+/* ================= 11. ПАРСЕР И ПРЕ-ДЕКОДИНГ ================= */
 
 function evaluateAsmExpression(expr) {
     if (!expr) return 0;
@@ -1250,7 +1294,6 @@ function resolveLabel(target, lineNum) {
     return cpu.labels[key];
 }
 
-/* Оптимизированный парсинг с поддержкой нескольких команд на строке через ':' */
 function parseProgram(text) {
     cpu.program = [];
     cpu.labels = {};
@@ -1285,7 +1328,7 @@ function parseProgram(text) {
         cpu.symbols = [];
         const lines = text.split('\n');
 
-        // Проход 1: сбор констант .equ и .def
+        // Проход 1: константы
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i];
             const sIdx = line.indexOf(';');
@@ -1300,7 +1343,7 @@ function parseProgram(text) {
             }
         }
 
-        // Проход 2: сбор меток и команд с разделением через ':'
+        // Проход 2: сбор команд
         let wordIndex = 0;
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i];
@@ -1341,19 +1384,16 @@ function parseProgram(text) {
 
             if (line.startsWith('.')) continue;
 
-            // Разбиваем строку на части по двоеточию
             const parts = line.split(':').map(p => p.trim()).filter(Boolean);
             for (let part of parts) {
                 const tokens = part.split(/\s+/);
                 const first = tokens[0].toLowerCase();
 
-                // Если это не известная команда - значит это метка!
                 if (!KNOWN_OPS.has(first)) {
                     cpu.labels[first] = wordIndex;
                     continue;
                 }
 
-                // Это команда
                 const op = first;
                 const argsStr = part.substring(tokens[0].length).trim();
                 const args = argsStr ? argsStr.split(',').map(a => a.trim()) : [];
@@ -1363,7 +1403,7 @@ function parseProgram(text) {
         }
     }
 
-    // Проход 3: Байткод-оптимизация (Pre-decoding числовых полей)
+    // Проход 3: Байткод-оптимизация и расстановка правильных адресов
     for (let j = 0; j < cpu.program.length; j++) {
         const inst = cpu.program[j];
         if (!inst) {
@@ -1377,15 +1417,22 @@ function parseProgram(text) {
 
         if (['ldi', 'subi', 'sbci', 'andi', 'ori', 'cpi'].includes(inst.op)) {
             inst.imm = a[1] ? (parseVal(a[1]) & 0xFF) : 0;
-        } else if (['sbi', 'cbi', 'bst', 'bld', 'sbrs', 'sbrc'].includes(inst.op)) {
+        }
+
+        // Порты и биты
+        if (inst.op === 'in') {
+            inst.ioAddr = a[1] ? resolveIoRamAddr(a[1]) : 0;
+        } else if (['out', 'sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {
+            inst.ioAddr = a[0] ? resolveIoRamAddr(a[0]) : 0;
+            if (['sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {
+                inst.bit = a[1] ? (parseVal(a[1]) & 0x07) : 0;
+            }
+        }
+
+        if (['sbrs', 'sbrc', 'bst', 'bld'].includes(inst.op)) {
             inst.bit = a[1] ? (parseVal(a[1]) & 0x07) : 0;
         }
-         // Для 'in' порт находится во 2-м аргументе a[1], для остальных — в 1-м a[0]
-         if (inst.op === 'in') {
-             inst.ioAddr = resolveIoRamAddr(a[1]);
-         } else if (['out', 'sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {
-             inst.ioAddr = resolveIoRamAddr(a[0]);
-         }
+
         if (['lds', 'sts'].includes(inst.op)) {
             inst.dataAddr = resolveDataRamAddr(inst.op === 'lds' ? a[1] : a[0]);
         }
@@ -1819,7 +1866,7 @@ function dispatchInterrupt(vectorWordAddr, vectorLabel) {
     }
 }
 
-/* ================= 16. БЫСТРЫЙ ШАГ CPU (PRE-DECODED BYTECODE) ================= */
+/* ================= 16. БЫСТРЫЙ ШАГ CPU (С ПОЛНОЙ ПОДДЕРЖКОЙ SBRC/SBRS) ================= */
 
 function cpuStep(silent = false) {
     if (cpu.pc < 0) cpu.pc = 0;
@@ -1847,7 +1894,6 @@ function cpuStep(silent = false) {
 
     if (op === 'break') { haltExecution(); if (!silent) updateUI(); return; }
 
-    // Быстрое выполнение без регулярных выражений и поиска по строкам
     switch (op) {
         case 'ldi': { cpu.r[inst.rd] = inst.imm; break; }
         case 'mov': { cpu.r[inst.rd] = cpu.r[inst.rr]; break; }
@@ -1904,6 +1950,20 @@ function cpuStep(silent = false) {
         }
         case 'sbic': {
             if ((readRAM(inst.ioAddr) & (1 << inst.bit)) === 0) nextPC += isTwoWordInstruction(cpu.program[nextPC]) ? 2 : 1;
+            break;
+        }
+
+        // КОМАНДЫ SBRS И SBRC (ВОССТАНОВЛЕНЫ ИСПРАВНЫМИ)
+        case 'sbrs': {
+            if ((cpu.r[inst.rd] & (1 << inst.bit)) !== 0) {
+                nextPC += isTwoWordInstruction(cpu.program[nextPC]) ? 2 : 1;
+            }
+            break;
+        }
+        case 'sbrc': {
+            if ((cpu.r[inst.rd] & (1 << inst.bit)) === 0) {
+                nextPC += isTwoWordInstruction(cpu.program[nextPC]) ? 2 : 1;
+            }
             break;
         }
 
@@ -2148,7 +2208,9 @@ function renderHardware() {
         if (c.type === 'led') {
             const pVal = readRAM(IO['PORT' + c.port]);
             const ledEl = document.getElementById('led_' + c.id);
-            if (ledEl) ledEl.className = 'led-light ' + ((pVal & (1 << c.pin)) ? 'active-led-green' : '');
+            if (ledEl) {
+                ledEl.className = 'led-light ' + ((pVal & (1 << c.pin)) ? 'active-led-green' : '');
+            }
         }
     });
 
@@ -2423,7 +2485,7 @@ function renderMemoryDumps() {
     memBox.textContent = output;
 }
 
-/* ================= 22. ОПТИМИЗИРОВАННЫЙ UPDATE UI (DIRTY CHECKING) ================= */
+/* ================= 22. ОБНОВЛЕНИЕ UI ================= */
 
 function initRegistersDom() {
     const rGrid = document.getElementById('registersGrid');
@@ -2458,7 +2520,6 @@ function updateUI() {
         document.getElementById('valY').textContent = '0x' + getPointerAddr('y').toString(16).padStart(4, '0').toUpperCase();
         document.getElementById('valZ').textContent = '0x' + getPointerAddr('z').toString(16).padStart(4, '0').toUpperCase();
 
-        // Флаги SREG
         const fGrid = document.getElementById('flagsGrid');
         if (fGrid) {
             fGrid.innerHTML = ['I','T','H','S','V','N','Z','C'].map(f => 
@@ -2466,7 +2527,6 @@ function updateUI() {
             ).join('');
         }
 
-        // Обновление регистров ТОЛЬКО при изменении значений (без пересоздания DOM)
         for (let i = 0; i < 32; i++) {
             if (cpu.r[i] !== cpu.prevR[i] || cpu.cycles === 0) {
                 const hexEl = document.getElementById(`regHex_${i}`);
@@ -2768,6 +2828,111 @@ function clearEditor() {
 /* ================= 25. БАЗА ПРОГРАММ ================= */
 
 const PROGRAMS = {
+    c_interrupt_int0: {
+        hint: "Нажатие кнопки K1 (PD2, INT0) вызывает прерывание по спаду, инвертируя светодиоды RX и TX.",
+        lang: "c",
+        code: `// Внешнее прерывание INT0 по спаду (нажатие K1 на PD2)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+ISR(INT0_vect)
+{
+    PORTD ^= (1 << PORTD0) | (1 << PORTD1);
+}
+
+int main(void)
+{
+    EICRA = (1 << ISC01);
+    EIMSK = (1 << INT0);
+
+    DDRD |= (1 << DDD0) | (1 << DDD1);
+    DDRD &= ~(1 << DDD2);
+    PORTD |= (1 << PORTD2); 
+
+    sei();
+
+    while (1) { }
+}`
+    },
+
+    c_example3: {
+        hint: "Опрос кнопки K4 (PB0) и включение светодиода L (PB5) при нажатии.",
+        lang: "c",
+        code: `// Опрос кнопки PB0 (с подтяжкой) и включение светодиода L (PB5)
+#include <avr/io.h>
+
+int main(void)
+{
+    DDRB = 0x20;
+    PORTB |= 0x01;
+
+    while (1)
+    {
+        if ((PINB & 0x01) == 0)
+            PORTB |= 0x20;
+        else
+            PORTB &= ~0x20;
+    }
+}`
+    },
+
+    c_zadanie5: {
+        hint: "Кнопки K1 (PD2), K2 (PD3), K3 (PD4) переключают светодиоды PD0 (RX), PD1 (TX) и PB5 (L).",
+        lang: "c",
+        code: `// Управление светодиодами кнопками-триггерами
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <util/delay.h>
+
+int main(void)
+{
+    DDRD |= (1 << DDD0) | (1 << DDD1);
+    DDRB |= (1 << DDB5);
+
+    PORTD &= ~((1 << PORTD0) | (1 << PORTD1));
+    PORTB &= ~(1 << PORTB5);
+
+    DDRD &= ~((1 << DDD2) | (1 << DDD3) | (1 << DDD4));
+    PORTD |= (1 << PORTD2) | (1 << PORTD3) | (1 << PORTD4);
+
+    while (1)
+    {
+        if (!(PIND & (1 << PIND2)))
+        {
+            _delay_ms(40);
+            if (!(PIND & (1 << PIND2)))
+            {
+                PORTD ^= (1 << PORTD0);
+                while (!(PIND & (1 << PIND2)));
+                _delay_ms(40);
+            }
+        }
+
+        if (!(PIND & (1 << PIND3)))
+        {
+            _delay_ms(40);
+            if (!(PIND & (1 << PIND3)))
+            {
+                PORTD ^= (1 << PORTD1);
+                while (!(PIND & (1 << PIND3)));
+                _delay_ms(40);
+            }
+        }
+
+        if (!(PIND & (1 << PIND4)))
+        {
+            _delay_ms(40);
+            if (!(PIND & (1 << PIND4)))
+            {
+                PORTB ^= (1 << PORTB5);
+                while (!(PIND & (1 << PIND4)));
+                _delay_ms(40);
+            }
+        }
+    }
+}`
+    },
+
     c_uart_rx_led: {
         hint: "<b>Тема 6:</b> Прием символа 'M' через UART по прерыванию <code>USART_RX_vect</code>. Зажигает светодиод L (PB5). Отправьте символ 'M' через консоль!",
         lang: "c",
@@ -2873,6 +3038,41 @@ repeat:
 Msg: .db "Atmega328P:ReadyToWork", '\\n'`
     },
 
+    c_blink_counter: {
+        hint: "Мигание светодиодом PB5 через счетчик до 800 000 с вложенными ветками if-else.",
+        lang: "c",
+        code: `// Мигание встроенным светодиодом на плате (PB5) через счетчик
+#define F_CPU 16000000UL
+#include <avr/io.h>
+
+int main(void)
+{
+    DDRB |= (1 << DDB5);
+
+    uint32_t x = 0;
+    int flag = 0;
+
+    while (1)
+    {
+        if (x >= 800000)
+        {
+            if (flag == 0)
+            {
+                PORTB |= (1 << PORTB5);
+                flag = 1;
+            }
+            else
+            {
+                PORTB &= ~(1 << PORTB5);
+                flag = 0;
+            }
+            x = 0;
+        }
+        x++;
+    }
+}`
+    },
+
     test_all: {
         hint: "Комплексный тест: проверка команд, регистров и всех флагов SREG (I, T, H, S, V, N, Z, C).",
         lang: "asm",
@@ -2963,146 +3163,6 @@ no_s:
 finish:
     break
     rjmp finish`
-    },
-
-    c_interrupt_int0: {
-        hint: "Нажатие кнопки K1 (PD2, INT0) вызывает прерывание по спаду, инвертируя светодиоды RX и TX.",
-        lang: "c",
-        code: `// Внешнее прерывание INT0 по спаду (нажатие K1 на PD2)
-#include <avr/io.h>
-#include <avr/interrupt.h>
-
-ISR(INT0_vect)
-{
-    PORTD ^= (1 << PORTD0) | (1 << PORTD1);
-}
-
-int main(void)
-{
-    EICRA = (1 << ISC01);
-    EIMSK = (1 << INT0);
-
-    DDRD |= (1 << DDD0) | (1 << DDD1);
-    DDRD &= ~(1 << DDD2);
-    PORTD |= (1 << PORTD2); 
-
-    sei();
-
-    while (1) { }
-}`
-    },
-
-    c_blink_counter: {
-        hint: "Мигание светодиодом PB5 через счетчик до 800 000 с вложенными ветками if-else.",
-        lang: "c",
-        code: `// Мигание встроенным светодиодом на плате (PB5) через счетчик
-#define F_CPU 16000000UL
-#include <avr/io.h>
-
-int main(void)
-{
-    DDRB |= (1 << DDB5);
-
-    uint32_t x = 0;
-    int flag = 0;
-
-    while (1)
-    {
-        if (x >= 800000)
-        {
-            if (flag == 0)
-            {
-                PORTB |= (1 << PORTB5);
-                flag = 1;
-            }
-            else
-            {
-                PORTB &= ~(1 << PORTB5);
-                flag = 0;
-            }
-            x = 0;
-        }
-        x++;
-    }
-}`
-    },
-
-    c_zadanie5: {
-        hint: "Кнопки K1 (PD2), K2 (PD3), K3 (PD4) переключают светодиоды PD0 (RX), PD1 (TX) и PB5 (L).",
-        lang: "c",
-        code: `// Управление светодиодами кнопками-триггерами
-#define F_CPU 16000000UL
-#include <avr/io.h>
-#include <util/delay.h>
-
-int main(void)
-{
-    DDRD |= (1 << DDD0) | (1 << DDD1);
-    DDRB |= (1 << DDB5);
-
-    PORTD &= ~((1 << PORTD0) | (1 << PORTD1));
-    PORTB &= ~(1 << PORTB5);
-
-    DDRD &= ~((1 << DDD2) | (1 << DDD3) | (1 << DDD4));
-    PORTD |= (1 << PORTD2) | (1 << PORTD3) | (1 << PORTD4);
-
-    while (1)
-    {
-        if (!(PIND & (1 << PIND2)))
-        {
-            _delay_ms(40);
-            if (!(PIND & (1 << PIND2)))
-            {
-                PORTD ^= (1 << PORTD0);
-                while (!(PIND & (1 << PIND2)));
-                _delay_ms(40);
-            }
-        }
-
-        if (!(PIND & (1 << PIND3)))
-        {
-            _delay_ms(40);
-            if (!(PIND & (1 << PIND3)))
-            {
-                PORTD ^= (1 << PORTD1);
-                while (!(PIND & (1 << PIND3)));
-                _delay_ms(40);
-            }
-        }
-
-        if (!(PIND & (1 << PIND4)))
-        {
-            _delay_ms(40);
-            if (!(PIND & (1 << PIND4)))
-            {
-                PORTB ^= (1 << PORTB5);
-                while (!(PIND & (1 << PIND4)));
-                _delay_ms(40);
-            }
-        }
-    }
-}`
-    },
-
-    c_example3: {
-        hint: "Опрос кнопки K4 (PB0) и включение светодиода L (PB5) при нажатии.",
-        lang: "c",
-        code: `// Опрос кнопки PB0 (с подтяжкой) и включение светодиода L (PB5)
-#include <avr/io.h>
-
-int main(void)
-{
-    DDRB = 0x20;
-    PORTB |= 0x01;
-
-    while (1)
-    {
-        if ((PINB & 0x01) == 0)
-            PORTB |= 0x20;
-        else
-            PORTB &= ~0x20;
-    }
-}`
     }
 };
 
@@ -3194,3 +3254,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setTimeout(resizeAnalyzerCanvas, 100);
 });
+

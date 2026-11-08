@@ -1387,15 +1387,14 @@ function parseProgram(text) {
     validateSourceCode(text, currentLang);
     if (cpu.syntaxErrors.size > 0) return;
 
-
-   if (currentLang === 'c') {
+    if (currentLang === 'c') {
         const compiled = compileCToAsm(text);
         let instIndex = 0;
         for (let item of compiled) {
             let line = item.asm.trim();
             if (!line || line.startsWith('.cseg')) continue;
 
-            // Запоминаем метку (включая метку строки __str_msg)
+            // Метки (включая метку строки __str_msg)
             if (line.includes(':')) {
                 const parts = line.split(':');
                 const lblName = parts[0].trim().toLowerCase();
@@ -1404,7 +1403,7 @@ function parseProgram(text) {
                 if (!line) continue;
             }
 
-            // ЗАПИСЬ СТРОКИ ИЗ СИ В FLASH-ПАМЯТЬ (.db)
+            // Запись строки из Си во Flash-память (.db)
             if (line.toLowerCase().startsWith('.db')) {
                 const dataStr = line.substring(3).trim();
                 let bytePtr = instIndex * 2;
@@ -1414,11 +1413,9 @@ function parseProgram(text) {
                     if (itm.startsWith('"') && itm.endsWith('"')) {
                         const strVal = itm.slice(1, -1);
                         for (let c = 0; c < strVal.length; c++) {
-                            // Обработка переноса строки \n
-                            if (strVal[c] === '\\' && strVal[c+1] === 'n') {
-                                cpu.flashBytes[bytePtr++] = 10;
-                                c++;
-                                continue;
+                            if (strVal[c] === '\\' && c + 1 < strVal.length) {
+                                if (strVal[c+1] === 'n') { cpu.flashBytes[bytePtr++] = 10; c++; continue; }
+                                if (strVal[c+1] === 'r') { cpu.flashBytes[bytePtr++] = 13; c++; continue; }
                             }
                             cpu.flashBytes[bytePtr++] = strVal.charCodeAt(c);
                         }
@@ -1443,13 +1440,11 @@ function parseProgram(text) {
             cpu.program.push({ op, args, lineNum: item.lineNum, raw: line, targetPc: -1 });
             instIndex++;
         }
-    }
-   
     } else {
         cpu.symbols = [];
         const lines = text.split('\n');
 
-        // Проход 1: константы
+        // Проход 1: константы .equ и .def
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i];
             const sIdx = line.indexOf(';');
@@ -1524,7 +1519,7 @@ function parseProgram(text) {
         }
     }
 
-    // Проход 3: Байткод-оптимизация и расстановка правильных адресов
+    // Проход 3: Байткод и адреса портов
     for (let j = 0; j < cpu.program.length; j++) {
         const inst = cpu.program[j];
         if (!inst) {
@@ -1540,7 +1535,6 @@ function parseProgram(text) {
             inst.imm = a[1] ? (parseVal(a[1]) & 0xFF) : 0;
         }
 
-        // Порты и биты
         if (inst.op === 'in') {
             inst.ioAddr = a[1] ? resolveIoRamAddr(a[1]) : 0;
         } else if (['out', 'sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {

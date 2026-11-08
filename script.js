@@ -3334,5 +3334,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     setTimeout(resizeAnalyzerCanvas, 100);
+   if (localStorage.getItem('avr_theme') === 'light') {
+        document.body.classList.add('theme-light');
+        const txt = document.getElementById('btnThemeText');
+        if (txt) txt.textContent = 'Темная';
+    }
 });
 

@@ -924,15 +924,20 @@ function scaleThreshold(val) {
     return (val < 0) ? (val & 0xFF) : Math.min(255, val);
 }
 
-/* ================= КОМПИЛЯТОР MICRO-C (С ПОДДЕРЖКОЙ СТРОК И МАССИВОВ msg[i]) ================= */
+/* ================= ОБНОВЛЕННЫЙ КОМПИЛЯТОР MICRO-C ================= */
+/* Поддерживает: Flash-строки, SRAM-массивы rx_buf/tx_buf, [i++], &&, цепочки сложения и sum >> 8 */
 
 function compileCToAsm(cCode) {
     cpu.symbols = [];
     let code = cCode.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
     
-    // Удаляем ключевые слова volatile и const, чтобы они не мешали парсингу
+    // Удаляем volatile и const
     code = code.replace(/\b(volatile|const)\s+/g, '');
     
+    // Преобразуем конструкции [i++] в две команды: [i] и i++
+    code = code.replace(/([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\+\+\]\s*=\s*([^;]+);/g, '$1[$2] = $3; $2++;');
+    code = code.replace(/([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\+\+\];/g, '$1 = $2[$3]; $3++;');
+
     code = code.replace(/if\s*(\((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*\))\s*([^{;]+;)/g, 'if $1 { $2 }');
     code = code.replace(/else\s+([^{;]+;)/g, 'else { $1 }');
     code = code.replace(/\{/g, '\n{\n').replace(/\}/g, '\n}\n').replace(/;/g, ';\n');
@@ -946,6 +951,7 @@ function compileCToAsm(cCode) {
     const defines = {};
     const globalInits = [];
     let insideMain = false;
+    let sramPtr = 0x0100; // Указатель свободной памяти ОЗУ под массивы
 
     let mainLineNum = 1;
     for (let i = 0; i < rawLines.length; i++) {
@@ -992,7 +998,7 @@ function compileCToAsm(cCode) {
         const lineNum = i + 1;
         if (!line || line.startsWith('#')) continue;
 
-        // Обработка строковых массивов: char msg[] = "...";
+        // 1. Строки во Flash-памяти: char msg[] = "...";
         const strArrMatch = line.match(/\bchar\s+([a-zA-Z0-9_]+)\s*\[\s*\]\s*=\s*(".*?")\s*;/);
         if (strArrMatch) {
             const arrName = strArrMatch[1];
@@ -1004,6 +1010,100 @@ function compileCToAsm(cCode) {
             continue;
         }
 
+        // 2. Объявления массивов в ОЗУ: uint8_t rx_buf[6], rx_idx = 0;
+        const ramDeclMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|char)\s+([^;]+);/);
+        if (ramDeclMatch && (line.includes('[') || line.includes(','))) {
+            const rawVars = ramDeclMatch[2].split(',');
+            for (let vItem of rawVars) {
+                vItem = vItem.trim();
+                const arrDef = vItem.match(/([a-zA-Z0-9_]+)\s*\[\s*(\d+)\s*\]/);
+                if (arrDef) {
+                    const aName = arrDef[1];
+                    const aSize = parseInt(arrDef[2], 10);
+                    varMap[aName] = { type: 'sram_array', addr: sramPtr, size: aSize };
+                    cpu.symbols.push({ name: aName, type: 'uint8_t[' + aSize + ']', size: aSize, locType: 'sram', location: '0x' + sramPtr.toString(16).toUpperCase() });
+                    sramPtr += aSize;
+                } else {
+                    const p = vItem.split('=');
+                    const vName = p[0].trim();
+                    const initVal = p[1] ? p[1].trim() : '0';
+                    const reg = 'r' + (regCounter++);
+                    varMap[vName] = { reg, type: 'uint8_t', size: 1 };
+                    cpu.symbols.push({ name: vName, type: 'uint8_t', size: 1, locType: 'reg', location: reg.toUpperCase() });
+                    let constVal = evaluateCExpression(applyDefines(initVal), defines);
+                    const inst = { asm: 'ldi ' + reg + ', ' + ((constVal !== null ? constVal : 0) & 0xFF), lineNum };
+                    if (!insideMain) globalInits.push(inst);
+                    else asmList.push(inst);
+                }
+            }
+            continue;
+        }
+
+        // 3. Цепочка сложения: uint16_t sum = rx_buf[1] + rx_buf[2] + rx_buf[3] + rx_buf[4];
+        const sumMatch = line.match(/\b(uint16_t|int)\s+([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
+        if (sumMatch && sumMatch[3].includes('+')) {
+            const vName = sumMatch[2];
+            const terms = sumMatch[3].split('+').map(t => t.trim());
+            const regLow = 'r' + (regCounter++);
+            const regHigh = 'r' + (regCounter++);
+            varMap[vName] = { regLow, regHigh, type: 'uint16_t', size: 2 };
+            cpu.symbols.push({ name: vName, type: 'uint16_t', size: 2, locType: 'reg', location: regLow.toUpperCase() + ':' + regHigh.toUpperCase() });
+
+            asmList.push({ asm: 'clr ' + regLow, lineNum });
+            asmList.push({ asm: 'clr ' + regHigh, lineNum });
+            asmList.push({ asm: 'clr r1', lineNum });
+
+            for (let term of terms) {
+                const elemMatch = term.match(/([a-zA-Z0-9_]+)\[(\d+)\]/);
+                if (elemMatch && varMap[elemMatch[1]]?.type === 'sram_array') {
+                    const aAddr = varMap[elemMatch[1]].addr + parseInt(elemMatch[2], 10);
+                    asmList.push({ asm: 'lds r16, ' + aAddr, lineNum });
+                    asmList.push({ asm: 'add ' + regLow + ', r16', lineNum });
+                    asmList.push({ asm: 'adc ' + regHigh + ', r1', lineNum });
+                }
+            }
+            continue;
+        }
+
+        // 4. Запись в массив: tx_buf[0] = '!'; tx_buf[1] = sum >> 8; rx_buf[rx_idx] = b;
+        const arrWriteMatch = line.match(/\b([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]\s*=\s*([^;]+);/);
+        if (arrWriteMatch && varMap[arrWriteMatch[1]]?.type === 'sram_array') {
+            const aName = arrWriteMatch[1];
+            const idxToken = arrWriteMatch[2];
+            const expr = arrWriteMatch[3].trim();
+            const baseAddr = varMap[aName].addr;
+
+            // Вычисляем значение в r16
+            if (expr.includes('>> 8')) {
+                const varSrc = expr.replace('>> 8', '').trim();
+                if (varMap[varSrc]?.regHigh) asmList.push({ asm: 'mov r16, ' + varMap[varSrc].regHigh, lineNum });
+            } else if (expr.includes('& 0xFF') || expr.includes('& 255')) {
+                const varSrc = expr.replace(/&.+/, '').trim();
+                if (varMap[varSrc]?.regLow) asmList.push({ asm: 'mov r16, ' + varMap[varSrc].regLow, lineNum });
+            } else if (varMap[expr]) {
+                asmList.push({ asm: 'mov r16, ' + varMap[expr].reg, lineNum });
+            } else {
+                let cVal = evaluateCExpression(applyDefines(expr), defines);
+                asmList.push({ asm: 'ldi r16, ' + ((cVal !== null ? cVal : 0) & 0xFF), lineNum });
+            }
+
+            // Записываем по адресу
+            if (/^\d+$/.test(idxToken)) {
+                const targetAddr = baseAddr + parseInt(idxToken, 10);
+                asmList.push({ asm: 'sts ' + targetAddr + ', r16', lineNum });
+            } else if (varMap[idxToken]) {
+                const idxReg = varMap[idxToken].reg;
+                asmList.push({ asm: 'ldi xl, low(' + baseAddr + ')', lineNum });
+                asmList.push({ asm: 'ldi xh, high(' + baseAddr + ')', lineNum });
+                asmList.push({ asm: 'add xl, ' + idxReg, lineNum });
+                asmList.push({ asm: 'clr r1', lineNum });
+                asmList.push({ asm: 'adc xh, r1', lineNum });
+                asmList.push({ asm: 'st X, r16', lineNum });
+            }
+            continue;
+        }
+
+        // 5. Прерывания ISR
         const isrMatch = line.match(/ISR\s*\(\s*([a-zA-Z0-9_]+)\s*\)/);
         if (isrMatch) {
             const vName = isrMatch[1];
@@ -1031,28 +1131,6 @@ function compileCToAsm(cCode) {
 
         if (line.includes('sei()')) { asmList.push({ asm: 'sei', lineNum }); continue; }
         if (line.includes('cli()')) { asmList.push({ asm: 'cli', lineNum }); continue; }
-
-        const delayMatch = line.match(/_delay_ms\s*\(\s*([0-9]+)\s*\);/);
-        if (delayMatch) {
-            const lblDelay = '__delay_loop_' + (labelCounter++);
-            asmList.push({ asm: 'ldi r24, 2', lineNum });
-            asmList.push({ asm: lblDelay + ':', lineNum });
-            asmList.push({ asm: 'dec r24', lineNum });
-            asmList.push({ asm: 'brne ' + lblDelay, lineNum });
-            continue;
-        }
-
-        if (line.startsWith('while') && line.includes('PIN')) {
-            const pinInfo = extractPinAndBit(line);
-            if (pinInfo) {
-                const lblWait = '__wait_release_' + (labelCounter++);
-                asmList.push({ asm: lblWait + ':', lineNum });
-                asmList.push({ asm: 'in r16, ' + pinInfo.port, lineNum });
-                asmList.push({ asm: 'sbrs r16, ' + pinInfo.bit, lineNum });
-                asmList.push({ asm: 'rjmp ' + lblWait, lineNum });
-                continue;
-            }
-        }
 
         if (line === '}' || line.startsWith('}')) {
             if (controlStack.length > 0) {
@@ -1084,13 +1162,14 @@ function compileCToAsm(cCode) {
             continue;
         }
 
+        if (line.startsWith('else if')) line = line.substring(5).trim();
         if (line.startsWith('else')) {
             line = line.substring(4).trim();
             if (!line || line === '{') continue;
         }
         if (line === '{') continue;
 
-        // Обычные переменные: uint8_t i = 0;
+        // 6. Обычные переменные (uint8_t b = UDR0;)
         const declMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int|char)\s+([^;]+);/);
         if (declMatch) {
             const typeName = declMatch[1];
@@ -1101,7 +1180,7 @@ function compileCToAsm(cCode) {
                 const initVal = parts[1] ? parts[1].trim() : '0';
                 const reg = 'r' + (regCounter++);
                 const size = (typeName.includes('32') ? 4 : (typeName.includes('16') || typeName === 'int') ? 2 : 1);
-                
+
                 varMap[vName] = { reg, type: typeName, size };
                 cpu.symbols.push({ name: vName, type: typeName, size, locType: 'reg', location: reg.toUpperCase() });
 
@@ -1109,49 +1188,89 @@ function compileCToAsm(cCode) {
                     asmList.push({ asm: 'lds ' + reg + ', UDR0', lineNum });
                 } else {
                     let constVal = evaluateCExpression(applyDefines(initVal), defines);
-                    if (constVal !== null) {
-                        const inst = { asm: 'ldi ' + reg + ', ' + (constVal & 0xFF), lineNum };
-                        if (!insideMain) globalInits.push(inst);
-                        else asmList.push(inst);
-                    }
+                    const inst = { asm: 'ldi ' + reg + ', ' + ((constVal !== null ? constVal : 0) & 0xFF), lineNum };
+                    if (!insideMain) globalInits.push(inst);
+                    else asmList.push(inst);
                 }
             }
             continue;
         }
 
-        // Чтение из массива в регистр: UDR0 = msg[i];
+        // 7. Чтение из массива: UDR0 = tx_buf[0]; UDR0 = msg[i]; UDR0 = msg[0];
         const arrReadMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;/);
         if (arrReadMatch) {
             const dst = arrReadMatch[1];
             const arr = arrReadMatch[2];
-            const idxVar = arrReadMatch[3];
-            if (varMap[arr]?.type === 'string_array' && varMap[idxVar]) {
-                const idxReg = varMap[idxVar].reg;
-                asmList.push({ asm: 'ldi zl, low(' + varMap[arr].label + ' << 1)', lineNum });
-                asmList.push({ asm: 'ldi zh, high(' + varMap[arr].label + ' << 1)', lineNum });
-                asmList.push({ asm: 'add zl, ' + idxReg, lineNum });
-                asmList.push({ asm: 'ldi r16, 0', lineNum });
-                asmList.push({ asm: 'adc zh, r16', lineNum });
+            const idxToken = arrReadMatch[3];
+            const isExtended = ['UCSR0B','UCSR0C','UDR0','EICRA','UBRR0L','UBRR0H'].includes(dst);
+
+            // Чтение из ОЗУ-массива (rx_buf / tx_buf)
+            if (varMap[arr]?.type === 'sram_array') {
+                const baseAddr = varMap[arr].addr;
+                if (/^\d+$/.test(idxToken)) {
+                    const srcAddr = baseAddr + parseInt(idxToken, 10);
+                    asmList.push({ asm: 'lds r16, ' + srcAddr, lineNum });
+                } else if (varMap[idxToken]) {
+                    const idxReg = varMap[idxToken].reg;
+                    asmList.push({ asm: 'ldi xl, low(' + baseAddr + ')', lineNum });
+                    asmList.push({ asm: 'ldi xh, high(' + baseAddr + ')', lineNum });
+                    asmList.push({ asm: 'add xl, ' + idxReg, lineNum });
+                    asmList.push({ asm: 'clr r1', lineNum });
+                    asmList.push({ asm: 'adc xh, r1', lineNum });
+                    asmList.push({ asm: 'ld r16, X', lineNum });
+                }
+                asmList.push({ asm: (isExtended ? 'sts ' : 'out ') + dst + ', r16', lineNum });
+                continue;
+            }
+
+            // Чтение из Flash-строки (msg[0] или msg[i])
+            if (varMap[arr]?.type === 'string_array') {
+                if (/^\d+$/.test(idxToken)) {
+                    const offset = parseInt(idxToken, 10);
+                    asmList.push({ asm: 'ldi zl, low((' + varMap[arr].label + ' << 1) + ' + offset + ')', lineNum });
+                    asmList.push({ asm: 'ldi zh, high((' + varMap[arr].label + ' << 1) + ' + offset + ')', lineNum });
+                } else if (varMap[idxToken]) {
+                    const idxReg = varMap[idxToken].reg;
+                    asmList.push({ asm: 'ldi zl, low(' + varMap[arr].label + ' << 1)', lineNum });
+                    asmList.push({ asm: 'ldi zh, high(' + varMap[arr].label + ' << 1)', lineNum });
+                    asmList.push({ asm: 'add zl, ' + idxReg, lineNum });
+                    asmList.push({ asm: 'clr r16', lineNum });
+                    asmList.push({ asm: 'adc zh, r16', lineNum });
+                }
                 asmList.push({ asm: 'lpm r16, Z', lineNum });
-                asmList.push({ asm: 'sts ' + dst + ', r16', lineNum });
+                asmList.push({ asm: (isExtended ? 'sts ' : 'out ') + dst + ', r16', lineNum });
                 continue;
             }
         }
 
-        // Проверка конца строки: if (msg[i] == '\0') или == 0
-        const arrCmpMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*(==|!=)\s*('\\0'|0)\s*\)/);
+        // 8. Сравнение элементов массива: if (rx_buf[5] == '.') или if (msg[i] == '\0')
+        const arrCmpMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*(==|!=)\s*([^)]+)\)/);
         if (arrCmpMatch) {
             const arr = arrCmpMatch[1];
-            const idxVar = arrCmpMatch[2];
+            const idxToken = arrCmpMatch[2];
             const op = arrCmpMatch[3];
-            if (varMap[arr]?.type === 'string_array' && varMap[idxVar]) {
-                const idxReg = varMap[idxVar].reg;
-                const lblFalse = '__lbl_false_' + (labelCounter++);
-                const lblEnd = '__lbl_end_' + (labelCounter++);
+            const cmpValRaw = arrCmpMatch[4].trim();
+            const cmpVal = evaluateCExpression(applyDefines(cmpValRaw), defines);
+            const lblFalse = '__lbl_false_' + (labelCounter++);
+            const lblEnd = '__lbl_end_' + (labelCounter++);
+
+            if (varMap[arr]?.type === 'sram_array') {
+                const baseAddr = varMap[arr].addr;
+                if (/^\d+$/.test(idxToken)) {
+                    asmList.push({ asm: 'lds r16, ' + (baseAddr + parseInt(idxToken, 10)), lineNum });
+                }
+                asmList.push({ asm: 'cpi r16, ' + ((cmpVal !== null ? cmpVal : 0) & 0xFF), lineNum });
+                if (op === '==') asmList.push({ asm: 'brne ' + lblFalse, lineNum });
+                else asmList.push({ asm: 'breq ' + lblFalse, lineNum });
+                controlStack.push({ type: 'if', lblFalse, lblEnd });
+                continue;
+            }
+            if (varMap[arr]?.type === 'string_array' && varMap[idxToken]) {
+                const idxReg = varMap[idxToken].reg;
                 asmList.push({ asm: 'ldi zl, low(' + varMap[arr].label + ' << 1)', lineNum });
                 asmList.push({ asm: 'ldi zh, high(' + varMap[arr].label + ' << 1)', lineNum });
                 asmList.push({ asm: 'add zl, ' + idxReg, lineNum });
-                asmList.push({ asm: 'ldi r16, 0', lineNum });
+                asmList.push({ asm: 'clr r16', lineNum });
                 asmList.push({ asm: 'adc zh, r16', lineNum });
                 asmList.push({ asm: 'lpm r16, Z', lineNum });
                 asmList.push({ asm: 'tst r16', lineNum });
@@ -1162,7 +1281,31 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Операции |=
+        // 9. Сложные условия if с && (например: if (b == '!' && rx_idx == 0))
+        if (line.startsWith('if') && line.includes('&&')) {
+            const condContent = line.substring(line.indexOf('(') + 1, line.lastIndexOf(')'));
+            const subConds = condContent.split('&&').map(c => c.trim());
+            const lblFalse = '__lbl_false_' + (labelCounter++);
+            const lblEnd = '__lbl_end_' + (labelCounter++);
+
+            for (let sub of subConds) {
+                const m = sub.match(/([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^]+)/);
+                if (m && varMap[m[1]]) {
+                    const cVal = evaluateCExpression(applyDefines(m[3]), defines);
+                    asmList.push({ asm: 'cpi ' + varMap[m[1]].reg + ', ' + ((cVal !== null ? cVal : 0) & 0xFF), lineNum });
+                    if (m[2] === '==') asmList.push({ asm: 'brne ' + lblFalse, lineNum });
+                    else if (m[2] === '!=') asmList.push({ asm: 'breq ' + lblFalse, lineNum });
+                    else if (m[2] === '>=') asmList.push({ asm: 'brlo ' + lblFalse, lineNum });
+                    else if (m[2] === '<')  asmList.push({ asm: 'brsh ' + lblFalse, lineNum });
+                    else if (m[2] === '>')  asmList.push({ asm: 'brls ' + lblFalse, lineNum });
+                    else if (m[2] === '<=') asmList.push({ asm: 'brhi ' + lblFalse, lineNum });
+                }
+            }
+            controlStack.push({ type: 'if', lblFalse, lblEnd });
+            continue;
+        }
+
+        // 10. Операции с портами: |= и &= ~
         const portOrMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD|UCSR0B|UCSR0C|EICRA|EIMSK)\s*\|\=\s*([^;]+);/);
         if (portOrMatch) {
             const portName = portOrMatch[1];
@@ -1174,7 +1317,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Операции &= ~
         const portAndNotMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD|UCSR0B|UCSR0C)\s*&\=\s*~\s*\(?\s*([^;]+)\)?;/);
         if (portAndNotMatch) {
             const portName = portAndNotMatch[1];
@@ -1187,7 +1329,7 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Присваивания
+        // 11. Обычные присваивания
         const assignMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
         if (assignMatch) {
             const dst = assignMatch[1].trim();
@@ -1224,7 +1366,7 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Опрос кнопок
+        // 12. Опрос ножек PIND / PINB
         if (line.startsWith('if') && line.includes('PIN')) {
             const pinInfo = extractPinAndBit(line);
             if (pinInfo) {
@@ -1238,7 +1380,7 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Обычные if сравнения
+        // 13. Простые сравнения if (tx_idx < 4) или if (rx_idx == 6)
         const ifMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^)]+)\)/);
         if (ifMatch) {
             const vName = ifMatch[1];
@@ -1293,6 +1435,7 @@ function compileCToAsm(cCode) {
 
     return asmList;
 }
+
 
 /* ================= ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ ТЕМЫ ================= */
 function toggleTheme() {

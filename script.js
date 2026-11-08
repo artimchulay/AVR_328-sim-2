@@ -924,9 +924,15 @@ function scaleThreshold(val) {
     return (val < 0) ? (val & 0xFF) : Math.min(255, val);
 }
 
+/* ================= КОМПИЛЯТОР MICRO-C (С ПОДДЕРЖКОЙ СТРОК И МАССИВОВ msg[i]) ================= */
+
 function compileCToAsm(cCode) {
     cpu.symbols = [];
     let code = cCode.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    
+    // Удаляем ключевые слова volatile и const, чтобы они не мешали парсингу
+    code = code.replace(/\b(volatile|const)\s+/g, '');
+    
     code = code.replace(/if\s*(\((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*\))\s*([^{;]+;)/g, 'if $1 { $2 }');
     code = code.replace(/else\s+([^{;]+;)/g, 'else { $1 }');
     code = code.replace(/\{/g, '\n{\n').replace(/\}/g, '\n}\n').replace(/;/g, ';\n');
@@ -966,7 +972,8 @@ function compileCToAsm(cCode) {
         let bit = 0;
         const shiftMatch = expr.match(/1\s*<<\s*([a-zA-Z0-9_]+)/i);
         if (shiftMatch) {
-            bit = evaluateCExpression(applyDefines(shiftMatch[1]), defines) || 0;
+            bit = evaluateCExpression(applyDefines(shiftMatch[1]), defines);
+            if (bit === null || isNaN(bit)) bit = 0;
         } else {
             const hexMatch = expr.match(/&\s*(0x[0-9a-fA-F]+|\d+)/i);
             if (hexMatch) {
@@ -984,6 +991,18 @@ function compileCToAsm(cCode) {
         let line = rawLines[i];
         const lineNum = i + 1;
         if (!line || line.startsWith('#')) continue;
+
+        // Обработка строковых массивов: char msg[] = "...";
+        const strArrMatch = line.match(/\bchar\s+([a-zA-Z0-9_]+)\s*\[\s*\]\s*=\s*(".*?")\s*;/);
+        if (strArrMatch) {
+            const arrName = strArrMatch[1];
+            const strVal = strArrMatch[2];
+            const strLbl = '__str_' + arrName;
+            asmList.push({ asm: '.cseg', lineNum });
+            asmList.push({ asm: strLbl + ': .db ' + strVal + ', 0', lineNum });
+            varMap[arrName] = { type: 'string_array', label: strLbl };
+            continue;
+        }
 
         const isrMatch = line.match(/ISR\s*\(\s*([a-zA-Z0-9_]+)\s*\)/);
         if (isrMatch) {
@@ -1023,7 +1042,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Опрос кнопок в while (ожидание отпускания)
         if (line.startsWith('while') && line.includes('PIN')) {
             const pinInfo = extractPinAndBit(line);
             if (pinInfo) {
@@ -1072,7 +1090,7 @@ function compileCToAsm(cCode) {
         }
         if (line === '{') continue;
 
-        // Объявления переменных
+        // Обычные переменные: uint8_t i = 0;
         const declMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int|char)\s+([^;]+);/);
         if (declMatch) {
             const typeName = declMatch[1];
@@ -1101,7 +1119,50 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Битовые операции с портами
+        // Чтение из массива в регистр: UDR0 = msg[i];
+        const arrReadMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;/);
+        if (arrReadMatch) {
+            const dst = arrReadMatch[1];
+            const arr = arrReadMatch[2];
+            const idxVar = arrReadMatch[3];
+            if (varMap[arr]?.type === 'string_array' && varMap[idxVar]) {
+                const idxReg = varMap[idxVar].reg;
+                asmList.push({ asm: 'ldi zl, low(' + varMap[arr].label + ' << 1)', lineNum });
+                asmList.push({ asm: 'ldi zh, high(' + varMap[arr].label + ' << 1)', lineNum });
+                asmList.push({ asm: 'add zl, ' + idxReg, lineNum });
+                asmList.push({ asm: 'ldi r16, 0', lineNum });
+                asmList.push({ asm: 'adc zh, r16', lineNum });
+                asmList.push({ asm: 'lpm r16, Z', lineNum });
+                asmList.push({ asm: 'sts ' + dst + ', r16', lineNum });
+                continue;
+            }
+        }
+
+        // Проверка конца строки: if (msg[i] == '\0') или == 0
+        const arrCmpMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*(==|!=)\s*('\\0'|0)\s*\)/);
+        if (arrCmpMatch) {
+            const arr = arrCmpMatch[1];
+            const idxVar = arrCmpMatch[2];
+            const op = arrCmpMatch[3];
+            if (varMap[arr]?.type === 'string_array' && varMap[idxVar]) {
+                const idxReg = varMap[idxVar].reg;
+                const lblFalse = '__lbl_false_' + (labelCounter++);
+                const lblEnd = '__lbl_end_' + (labelCounter++);
+                asmList.push({ asm: 'ldi zl, low(' + varMap[arr].label + ' << 1)', lineNum });
+                asmList.push({ asm: 'ldi zh, high(' + varMap[arr].label + ' << 1)', lineNum });
+                asmList.push({ asm: 'add zl, ' + idxReg, lineNum });
+                asmList.push({ asm: 'ldi r16, 0', lineNum });
+                asmList.push({ asm: 'adc zh, r16', lineNum });
+                asmList.push({ asm: 'lpm r16, Z', lineNum });
+                asmList.push({ asm: 'tst r16', lineNum });
+                if (op === '==') asmList.push({ asm: 'brne ' + lblFalse, lineNum });
+                else asmList.push({ asm: 'breq ' + lblFalse, lineNum });
+                controlStack.push({ type: 'if', lblFalse, lblEnd });
+                continue;
+            }
+        }
+
+        // Операции |=
         const portOrMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD|UCSR0B|UCSR0C|EICRA|EIMSK)\s*\|\=\s*([^;]+);/);
         if (portOrMatch) {
             const portName = portOrMatch[1];
@@ -1113,6 +1174,7 @@ function compileCToAsm(cCode) {
             continue;
         }
 
+        // Операции &= ~
         const portAndNotMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD|UCSR0B|UCSR0C)\s*&\=\s*~\s*\(?\s*([^;]+)\)?;/);
         if (portAndNotMatch) {
             const portName = portAndNotMatch[1];
@@ -1122,17 +1184,6 @@ function compileCToAsm(cCode) {
             asmList.push({ asm: (isExtended ? 'lds' : 'in') + ' r16, ' + portName, lineNum });
             asmList.push({ asm: 'andi r16, ' + invMask, lineNum });
             asmList.push({ asm: (isExtended ? 'sts' : 'out') + ' ' + portName + ', r16', lineNum });
-            continue;
-        }
-
-        const portXorMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD)\s*\^\=\s*([^;]+);/);
-        if (portXorMatch) {
-            const portName = portXorMatch[1];
-            const mask = evaluateCExpression(applyDefines(portXorMatch[2]), defines) & 0xFF;
-            asmList.push({ asm: 'in r16, ' + portName, lineNum });
-            asmList.push({ asm: 'ldi r17, ' + mask, lineNum });
-            asmList.push({ asm: 'eor r16, r17', lineNum });
-            asmList.push({ asm: 'out ' + portName + ', r16', lineNum });
             continue;
         }
 
@@ -1173,7 +1224,7 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Опрос кнопок в if (!PIND) или if ((PINB & 1) == 0)
+        // Опрос кнопок
         if (line.startsWith('if') && line.includes('PIN')) {
             const pinInfo = extractPinAndBit(line);
             if (pinInfo) {
@@ -1187,7 +1238,7 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Ветвление if (data == 'M') или if (x >= 200)
+        // Обычные if сравнения
         const ifMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^)]+)\)/);
         if (ifMatch) {
             const vName = ifMatch[1];
@@ -1241,6 +1292,15 @@ function compileCToAsm(cCode) {
     }
 
     return asmList;
+}
+
+/* ================= ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ ТЕМЫ ================= */
+function toggleTheme() {
+    const isLight = document.body.classList.toggle('theme-light');
+    localStorage.setItem('avr_theme', isLight ? 'light' : 'dark');
+    const txt = document.getElementById('btnThemeText');
+    if (txt) txt.textContent = isLight ? 'Темная' : 'Светлая';
+    if (activePanels.analyzer) drawLogicAnalyzer();
 }
 
 /* ================= 11. ПАРСЕР И ПРЕ-ДЕКОДИНГ ================= */

@@ -1387,17 +1387,55 @@ function parseProgram(text) {
     validateSourceCode(text, currentLang);
     if (cpu.syntaxErrors.size > 0) return;
 
-    if (currentLang === 'c') {
+
+   if (currentLang === 'c') {
         const compiled = compileCToAsm(text);
         let instIndex = 0;
         for (let item of compiled) {
             let line = item.asm.trim();
+            if (!line || line.startsWith('.cseg')) continue;
+
+            // Запоминаем метку (включая метку строки __str_msg)
             if (line.includes(':')) {
                 const parts = line.split(':');
-                cpu.labels[parts[0].trim().toLowerCase()] = instIndex;
+                const lblName = parts[0].trim().toLowerCase();
+                cpu.labels[lblName] = instIndex;
                 line = parts.slice(1).join(':').trim();
                 if (!line) continue;
             }
+
+            // ЗАПИСЬ СТРОКИ ИЗ СИ В FLASH-ПАМЯТЬ (.db)
+            if (line.toLowerCase().startsWith('.db')) {
+                const dataStr = line.substring(3).trim();
+                let bytePtr = instIndex * 2;
+                const items = dataStr.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+                for (let itm of items) {
+                    itm = itm.trim();
+                    if (itm.startsWith('"') && itm.endsWith('"')) {
+                        const strVal = itm.slice(1, -1);
+                        for (let c = 0; c < strVal.length; c++) {
+                            // Обработка переноса строки \n
+                            if (strVal[c] === '\\' && strVal[c+1] === 'n') {
+                                cpu.flashBytes[bytePtr++] = 10;
+                                c++;
+                                continue;
+                            }
+                            cpu.flashBytes[bytePtr++] = strVal.charCodeAt(c);
+                        }
+                    } else if (itm === "'\\n'") {
+                        cpu.flashBytes[bytePtr++] = 10;
+                    } else {
+                        cpu.flashBytes[bytePtr++] = evaluateAsmExpression(itm) & 0xFF;
+                    }
+                }
+                const wordsUsed = Math.ceil((bytePtr - (instIndex * 2)) / 2);
+                for (let w = 0; w < wordsUsed; w++) {
+                    cpu.program[instIndex + w] = { op: 'nop', args: [], lineNum: item.lineNum, raw: '.db', targetPc: -1 };
+                }
+                instIndex += wordsUsed;
+                continue;
+            }
+
             const tokens = line.split(/\s+/);
             const op = tokens[0].toLowerCase();
             const argsStr = line.substring(tokens[0].length).trim();
@@ -1405,6 +1443,8 @@ function parseProgram(text) {
             cpu.program.push({ op, args, lineNum: item.lineNum, raw: line, targetPc: -1 });
             instIndex++;
         }
+    }
+   
     } else {
         cpu.symbols = [];
         const lines = text.split('\n');

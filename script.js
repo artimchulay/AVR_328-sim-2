@@ -745,12 +745,24 @@ function zoomAnalyzer(delta) {
     scheduleAnalyzerDraw();
 }
 
-function recordAnalyzerSample() {
+/* ================= 9. ОПТИМИЗИРОВАННАЯ ЗАПИСЬ СЭМПЛОВ ================= */
+
+let lastPinSampleHash = -1;
+
+function recordAnalyzerSample(force = false) {
     if (!activePanels.analyzer) return;
 
     const pind = readRAM(IO.PIND), ddrd = readRAM(IO.DDRD), portd = readRAM(IO.PORTD);
     const pinb = readRAM(IO.PINB), ddrb = readRAM(IO.DDRB), portb = readRAM(IO.PORTB);
     const pinc = readRAM(IO.PINC), ddrc = readRAM(IO.DDRC), portc = readRAM(IO.PORTC);
+
+    const currentHash = (portd << 16) ^ (portb << 8) ^ portc ^ (pind << 24) ^ (pinb << 4) ^ pinc;
+
+    // Записываем сэмпл только если изменилось состояние пинов или прошел шаг цикла
+    if (!force && cpu.running && currentHash === lastPinSampleHash && (cpu.cycles % 16 !== 0)) {
+        return;
+    }
+    lastPinSampleHash = currentHash;
 
     function getPinVal(portLetter, pin) {
         if (portLetter === 'D') return (ddrd & (1 << pin)) ? ((portd >> pin) & 1) : ((pind >> pin) & 1);
@@ -768,19 +780,10 @@ function recordAnalyzerSample() {
     }
 
     analyzer.samples.push(sample);
-    if (analyzer.samples.length > analyzer.maxSamples + 100) {
-        analyzer.samples.splice(0, 100);
+    if (analyzer.samples.length > analyzer.maxSamples) {
+        analyzer.samples.shift(); // Быстрый сдвиг без перевыделения массивов
     }
     scheduleAnalyzerDraw();
-}
-
-function scheduleAnalyzerDraw() {
-    if (analyzerScheduled || !activePanels.analyzer) return;
-    analyzerScheduled = true;
-    requestAnimationFrame(() => {
-        analyzerScheduled = false;
-        drawLogicAnalyzer();
-    });
 }
 
 function resizeAnalyzerCanvas() {
@@ -1588,6 +1591,7 @@ function parseProgram(text) {
     cpu.labels = {};
     cpu.equConstants = {};
     cpu.flashBytes.fill(0);
+    inspectorNeedsRebuild = true;
     cpu.error = null;
     if (!text) return;
     text = text.replace(/\r/g, '');
@@ -2563,6 +2567,8 @@ function toggleVButton(id) {
     updateUI();
 }
 
+/* ================= 17. СИНХРОНИЗАЦИЯ ПЛАТЫ (ОПТИМИЗИРОВАНО) ================= */
+
 function syncHardwareState() {
     applyHardwarePins();
 
@@ -2571,10 +2577,13 @@ function syncHardwareState() {
 
     let sregByte = 0;
     const flags = ['C','Z','N','V','S','H','T','I'];
-    flags.forEach((f, idx) => { if (cpu.sreg[f]) sregByte |= (1 << idx); });
+    for (let i = 0; i < 8; i++) {
+        if (cpu.sreg[flags[i]]) sregByte |= (1 << i);
+    }
     cpu.ram[IO.SREG] = sregByte;
 
-    for (let i = 0; i < 32; i++) cpu.ram[i] = cpu.r[i];
+    // Быстрое копирование 32 регистров без поэлементного цикла
+    cpu.ram.set(cpu.r.subarray(0, 32), 0);
 
     syncAnalogHardware();
     updateLcdHardware();
@@ -2767,6 +2776,8 @@ function toggleRun() {
     }
 }
 
+let lastUiRenderTime = 0;
+
 function runLoop() {
     if (!cpu.running) return;
 
@@ -2789,7 +2800,16 @@ function runLoop() {
         }
     }
 
-    updateUI();
+    syncHardwareState();
+    recordAnalyzerSample(true);
+
+    const now = performance.now();
+    // Ограничиваем тяжелый рендеринг DOM (максимум ~30 кадров/сек)
+    if (now - lastUiRenderTime >= 30 || !cpu.running) {
+        lastUiRenderTime = now;
+        updateUI();
+    }
+
     if (cpu.running) cpu.timer = setTimeout(runLoop, delay);
 }
 
@@ -2959,36 +2979,114 @@ function updateUI() {
     updateGutterPcArrow();
 }
 
-/* ================= 23. ИНСТРУМЕНТЫ: УМНЫЙ WATCH И ИНСПЕКТОР ================= */
 
-function renderToolsTab() {
-    renderAsmInspector();
-    renderWatchTable();
-}
 
-function renderAsmInspector() {
+/* ================= 23. ИНСТРУМЕНТЫ: УМНЫЙ WATCH И ИНСПЕКТОР (ОПТИМИЗИРОВАНО) ================= */
+
+let inspectorNeedsRebuild = true;
+let lastInspectorPc = -1;
+
+function rebuildAsmInspector() {
     const box = document.getElementById('asmInspectorCode');
     if (!box) return;
 
     if (currentLang !== 'c') {
         box.innerHTML = '<div style="color:var(--text-muted); padding:10px;">Инспектор доступен в режиме Си (C).<br>Переключите язык редактора на C.</div>';
+        inspectorNeedsRebuild = false;
         return;
     }
 
     let out = '';
     for (let i = 0; i < cpu.program.length; i++) {
-        const isCurrent = (i === cpu.pc);
         const inst = cpu.program[i];
         const lineText = inst.raw || (inst.op + ' ' + (inst.args ? inst.args.join(', ') : ''));
         const highlighted = highlightCode(lineText);
         
-        out += `<div class="inspector-row ${isCurrent ? 'is-current-pc' : ''}">` +
-               `<span class="inspector-pc-arrow">${isCurrent ? '▶' : ''}</span>` +
+        out += `<div class="inspector-row" id="inspRow_${i}">` +
+               `<span class="inspector-pc-arrow" id="inspArrow_${i}"></span>` +
                `<span class="inspector-addr">${i.toString(16).padStart(4, '0').toUpperCase()}:</span>` +
                `<span class="inspector-code-text">${highlighted}</span>` +
                `</div>`;
     }
     box.innerHTML = out || '<div style="color:var(--text-muted); padding:10px;">Код пуст...</div>';
+    inspectorNeedsRebuild = false;
+    lastInspectorPc = -1;
+}
+
+function updateAsmInspectorCursor() {
+    if (currentLang !== 'c' || !activePanels.tools) return;
+    if (inspectorNeedsRebuild) {
+        rebuildAsmInspector();
+    }
+    if (lastInspectorPc === cpu.pc) return;
+
+    if (lastInspectorPc !== -1) {
+        const prevRow = document.getElementById(`inspRow_${lastInspectorPc}`);
+        const prevArrow = document.getElementById(`inspArrow_${lastInspectorPc}`);
+        if (prevRow) prevRow.classList.remove('is-current-pc');
+        if (prevArrow) prevArrow.textContent = '';
+    }
+
+    const curRow = document.getElementById(`inspRow_${cpu.pc}`);
+    const curArrow = document.getElementById(`inspArrow_${cpu.pc}`);
+    if (curRow) {
+        curRow.classList.add('is-current-pc');
+        curRow.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    }
+    if (curArrow) curArrow.textContent = '▶';
+    lastInspectorPc = cpu.pc;
+}
+
+function renderToolsTab() {
+    if (inspectorNeedsRebuild) rebuildAsmInspector();
+    updateAsmInspectorCursor();
+    renderWatchTable();
+}
+
+function renderWatchTable() {
+    const tbody = document.getElementById('watchTableBody');
+    const countBadge = document.getElementById('watchVarsCount');
+    if (!tbody || !activePanels.tools) return;
+
+    let html = '';
+
+    if (cpu.symbols && cpu.symbols.length > 0) {
+        if (countBadge) countBadge.textContent = 'Переменных: ' + cpu.symbols.length;
+        cpu.symbols.forEach(sym => {
+            let val = 0;
+            if (sym.locType === 'reg') {
+                const regIdx = parseReg(sym.location);
+                val = cpu.r[regIdx];
+            } else if (sym.locType === 'sram') {
+                val = readRAM(parseInt(sym.location, 16) || 0x0100);
+            }
+            const sVal = (val & 0x80) ? (val - 256) : val;
+
+            html += '<tr>';
+            html += '<td><b>' + sym.name + '</b></td>';
+            html += '<td><span class="watch-type-badge">' + sym.type + '</span></td>';
+            html += '<td>' + sVal + ' (DEC)</td>';
+            html += '<td>0x' + val.toString(16).padStart(2, '0').toUpperCase() + '</td>';
+            html += '<td>0b' + val.toString(2).padStart(8, '0') + '</td>';
+            html += '<td><span class="watch-loc-badge">' + sym.location + '</span></td>';
+            html += '</tr>';
+        });
+    } else {
+        if (countBadge) countBadge.textContent = 'Регистры: R16..R24';
+        for (let i = 16; i <= 24; i++) {
+            const val = cpu.r[i];
+            const sVal = (val & 0x80) ? (val - 256) : val;
+            html += '<tr>';
+            html += '<td><b>R' + i + '</b></td>';
+            html += '<td><span class="watch-type-badge">reg</span></td>';
+            html += '<td>' + sVal + ' (DEC)</td>';
+            html += '<td>0x' + val.toString(16).padStart(2, '0').toUpperCase() + '</td>';
+            html += '<td>0b' + val.toString(2).padStart(8, '0') + '</td>';
+            html += '<td><span class="watch-loc-badge">CPU</span></td>';
+            html += '</tr>';
+        }
+    }
+    tbody.innerHTML = html;
 }
 
 function renderWatchTable() {

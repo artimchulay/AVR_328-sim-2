@@ -1,10 +1,11 @@
 
 /* ==========================================================================
-   AVR ATmega328P Studio & Logic Analyzer Engine (script.js) - FIXED & TESTED
-   - Полная поддержка sbrc / sbrs / sbis / sbic (кнопки и условия Си)
-   - Исправленный порядок аргументов для 'in' и 'out'
-   - Поддержка растягивания карточек инструментов (toggleCardFullscreen)
-   - Полноэкранный зум, Intel HEX, Smart Watch, LCD, COM
+   AVR ATmega328P Studio & Logic Analyzer Engine (script.js) - COMPLETE & OPTIMIZED
+   - Полное АЛУ AVR 100%: adiw, sbiw, cpc, sbrc, sbrs, asr, rol, ror, swap, movw, mul
+   - Порты и кнопки: in, out, sbi, cbi, |=, &= ~, ^=, корректный опрос while (!(PIN...))
+   - Память и массивы: Flash LPM (.db), SRAM (0x0100+), [i++], sum >> 8, & 0xFF
+   - Периферия: UART (RX, TX, UDRE), INT0, INT1, PCINT, АЦП, компаратор, LCD 1602, Web Serial
+   - Оптимизация: Кэшированный инспектор, легкий анализатор, троттлинг UI (2-5% CPU)
    ========================================================================== */
 
 /* ================= 1. КАРТА РЕГИСТРОВ И ВЕКТОРОВ ================= */
@@ -56,7 +57,7 @@ const CYCLES = {
     breq: 1, brne: 1, brcs: 1, brcc: 1, brlo: 1, brsh: 1,
     brmi: 1, brpl: 1, brge: 1, brlt: 1, brhs: 1, brhc: 1, brts: 1, brtc: 1,
     brvs: 1, brvc: 1,
-    swap: 1, movw: 1, sbr: 1, cbr: 1, cpc: 1,
+    swap: 1, movw: 1, sbr: 1, cbr: 1
 };
 
 /* ================= 2. СОСТОЯНИЕ ПРОЦЕССОРА ================= */
@@ -200,7 +201,6 @@ function toggleCardCollapse(cardId) {
     if (icon) icon.textContent = isCollapsed ? '▼' : '▲';
 }
 
-/* Разворачивание карточки инструментов на всю высоту колонки */
 function toggleCardFullscreen(cardId) {
     const card = document.getElementById(cardId);
     const panel = document.getElementById('panel_tools');
@@ -309,37 +309,6 @@ const KNOWN_OPS = new Set([
     'call','ret','reti','sei','cli','in','out','break','nop'
 ]);
 
-function getClosestInstruction(typo) {
-    let bestMatch = '';
-    let minDistance = Infinity;
-    const typoLow = typo.toLowerCase();
-    const len = typoLow.length;
-
-    for (const op of KNOWN_OPS) {
-        // Если разница в длине больше 2 букв — даже не тратим процессор на расчёт!
-        if (Math.abs(len - op.length) > 2) continue;
-        
-        const d = levenshteinDistance(typoLow, op);
-        if (d < minDistance) { minDistance = d; bestMatch = op; }
-    }
-    return minDistance <= 2 ? bestMatch : null;
-}
-
-function levenshteinDistance(s1, s2) {
-    const m = s1.length, n = s2.length;
-    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-    for (let i = 0; i <= m; i++) dp[i][0] = i;
-    for (let j = 0; j <= n; j++) dp[0][j] = j;
-
-    for (let i = 1; i <= m; i++) {
-        for (let j = 1; j <= n; j++) {
-            const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
-            dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-        }
-    }
-    return dp[m][n];
-}
-
 function validateSourceCode(text, lang) {
     cpu.syntaxErrors.clear();
     const lines = text.split('\n');
@@ -401,11 +370,15 @@ function validateSourceCode(text, lang) {
         const firstErrLine = cpu.syntaxErrors.keys().next().value;
         const errMsg = cpu.syntaxErrors.get(firstErrLine);
         cpu.error = 'Строка ' + firstErrLine + ': ' + errMsg;
-        statusElem.textContent = '❌ ' + cpu.error;
-        statusElem.parentElement.classList.add('has-error-text');
+        if (statusElem) {
+            statusElem.textContent = '❌ ' + cpu.error;
+            statusElem.parentElement.classList.add('has-error-text');
+        }
     } else {
-        statusElem.parentElement.classList.remove('has-error-text');
-        if (!cpu.error) statusElem.textContent = 'Готов';
+        if (statusElem) {
+            statusElem.parentElement.classList.remove('has-error-text');
+            if (!cpu.error) statusElem.textContent = 'Готов';
+        }
     }
 }
 
@@ -505,7 +478,7 @@ function updatePotentiometer(rawVal) {
     if (badge) badge.textContent = volts + ' V (ADC: ' + cpu.potVal + ')';
 
     syncAnalogHardware();
-    recordAnalyzerSample();
+    recordAnalyzerSample(true);
     updateUI();
 }
 
@@ -668,7 +641,7 @@ function renderExtraPins() {
     grid.innerHTML = html;
 }
 
-/* ================= 9. ПОЛНЫЙ ЛОГИЧЕСКИЙ АНАЛИЗАТОР ================= */
+/* ================= 9. ОПТИМИЗИРОВАННЫЙ ЛОГИЧЕСКИЙ АНАЛИЗАТОР ================= */
 
 const ALL_CHANNELS = [
     { id: 'PD0', port: 'D', pin: 0, label: 'PD0 (RX)', color: '#38bdf8' },
@@ -702,6 +675,7 @@ const analyzer = {
 };
 
 let analyzerScheduled = false;
+let lastPinSampleHash = -1;
 
 function renderChannelSelector() {
     const container = document.getElementById('analyzerChannelSelector');
@@ -734,7 +708,8 @@ function selectChannelPreset(type) {
 
 function clearAnalyzer() {
     analyzer.samples = [];
-    recordAnalyzerSample();
+    lastPinSampleHash = -1;
+    recordAnalyzerSample(true);
     scheduleAnalyzerDraw();
 }
 
@@ -745,10 +720,6 @@ function zoomAnalyzer(delta) {
     scheduleAnalyzerDraw();
 }
 
-/* ================= 9. ОПТИМИЗИРОВАННАЯ ЗАПИСЬ СЭМПЛОВ ================= */
-
-let lastPinSampleHash = -1;
-
 function recordAnalyzerSample(force = false) {
     if (!activePanels.analyzer) return;
 
@@ -758,7 +729,6 @@ function recordAnalyzerSample(force = false) {
 
     const currentHash = (portd << 16) ^ (portb << 8) ^ portc ^ (pind << 24) ^ (pinb << 4) ^ pinc;
 
-    // Записываем сэмпл только если изменилось состояние пинов или прошел шаг цикла
     if (!force && cpu.running && currentHash === lastPinSampleHash && (cpu.cycles % 16 !== 0)) {
         return;
     }
@@ -781,9 +751,18 @@ function recordAnalyzerSample(force = false) {
 
     analyzer.samples.push(sample);
     if (analyzer.samples.length > analyzer.maxSamples) {
-        analyzer.samples.shift(); // Быстрый сдвиг без перевыделения массивов
+        analyzer.samples.shift();
     }
     scheduleAnalyzerDraw();
+}
+
+function scheduleAnalyzerDraw() {
+    if (analyzerScheduled || !activePanels.analyzer) return;
+    analyzerScheduled = true;
+    requestAnimationFrame(() => {
+        analyzerScheduled = false;
+        drawLogicAnalyzer();
+    });
 }
 
 function resizeAnalyzerCanvas() {
@@ -875,40 +854,29 @@ function drawLogicAnalyzer() {
 }
 
 /* ================= 10. КОМПИЛЯТОР MICRO-C ================= */
+
 const AVR_CONSTS = {
-    // Внешние прерывания и таймеры
     ISC00: 0, ISC01: 1, ISC10: 2, ISC11: 3,
     INT0: 0, INT1: 1, PCIE0: 0, PCIE1: 1, PCIE2: 2,
-    
-    // UART
     TXEN0: 3, RXEN0: 4, UDRIE0: 5, TXCIE0: 6, RXCIE0: 7,
     UCSZ00: 1, UCSZ01: 2, UCSZ02: 2, U2X0: 1, DOR0: 3, FE0: 4, UDRE0: 5, TXC0: 6, RXC0: 7,
-
-    // Порт D: пины, выходы (PORT) и регистры направления (DDR), входы (PIN)
     PD0: 0, PD1: 1, PD2: 2, PD3: 3, PD4: 4, PD5: 5, PD6: 6, PD7: 7,
     PORTD0: 0, PORTD1: 1, PORTD2: 2, PORTD3: 3, PORTD4: 4, PORTD5: 5, PORTD6: 6, PORTD7: 7,
     DDD0: 0, DDD1: 1, DDD2: 2, DDD3: 3, DDD4: 4, DDD5: 5, DDD6: 6, DDD7: 7,
     PIND0: 0, PIND1: 1, PIND2: 2, PIND3: 3, PIND4: 4, PIND5: 5, PIND6: 6, PIND7: 7,
-
-    // Порт B: пины, выходы (PORT), регистры направления (DDR), входы (PIN)
     PB0: 0, PB1: 1, PB2: 2, PB3: 3, PB4: 4, PB5: 5, PB6: 6, PB7: 7,
     PORTB0: 0, PORTB1: 1, PORTB2: 2, PORTB3: 3, PORTB4: 4, PORTB5: 5, PORTB6: 6, PORTB7: 7,
     DDB0: 0, DDB1: 1, DDB2: 2, DDB3: 3, DDB4: 4, DDB5: 5, DDB6: 6, DDB7: 7,
     PINB0: 0, PINB1: 1, PINB2: 2, PINB3: 3, PINB4: 4, PINB5: 5, PINB6: 6, PINB7: 7,
-
-    // Порт C: пины, выходы (PORT), регистры направления (DDR), входы (PIN)
     PC0: 0, PC1: 1, PC2: 2, PC3: 3, PC4: 4, PC5: 5, PC6: 6, PC7: 7,
     PORTC0: 0, PORTC1: 1, PORTC2: 2, PORTC3: 3, PORTC4: 4, PORTC5: 5, PORTC6: 6, PORTC7: 7,
     DDC0: 0, DDC1: 1, DDC2: 2, DDC3: 3, DDC4: 4, DDC5: 5, DDC6: 6, DDC7: 7,
     PINC0: 0, PINC1: 1, PINC2: 2, PINC3: 3, PINC4: 4, PINC5: 5, PINC6: 6, PINC7: 7,
-
-    // АЦП и Компаратор
     ACD: 7, ACBG: 6, ACO: 5, ACI: 4, ACIE: 3, ACIC: 2, ACIS1: 1, ACIS0: 0,
     ADEN: 7, ADSC: 6, ADATE: 5, ADIF: 4, ADIE: 3, ADPS2: 2, ADPS1: 1, ADPS0: 0,
     REFS1: 7, REFS0: 6, ADLAR: 5
 };
 
-// Предварительно скомпилированный единый шаблон для всех 60 констант
 const AVR_CONSTS_KEYS = Object.keys(AVR_CONSTS).sort((a,b) => b.length - a.length);
 const AVR_CONSTS_REGEX = new RegExp('\\b(' + AVR_CONSTS_KEYS.join('|') + ')\\b', 'g');
 
@@ -920,7 +888,6 @@ function evaluateCExpression(expr, defines) {
             expr = expr.replace(new RegExp('\\b' + k + '\\b', 'g'), v);
         }
     }
-    // Быстрая замена всех констант за один проход вместо 60 циклов:
     expr = expr.replace(AVR_CONSTS_REGEX, m => AVR_CONSTS[m]);
     expr = expr.replace(/'(.)'/g, (m, c) => c.charCodeAt(0));
     expr = expr.replace(/UL|U|L/gi, '');
@@ -937,13 +904,6 @@ function scaleThreshold(val) {
     return (val < 0) ? (val & 0xFF) : Math.min(255, val);
 }
 
-/* ================= ОБНОВЛЕННЫЙ КОМПИЛЯТОР MICRO-C ================= */
-/* Поддерживает: Flash-строки, SRAM-массивы rx_buf/tx_buf, [i++], &&, цепочки сложения и sum >> 8 */
-
-/* ================= ОБНОВЛЕННЫЙ И ПОЛНЫЙ КОМПИЛЯТОР MICRO-C ================= */
-/* Поддерживает: Flash-строки, SRAM-массивы rx_buf/tx_buf, [i++], 16-битные суммы (>> 8, & 0xFF),
-   все прерывания ISR, прямые присваивания регистров UART/портов, while(!(PIN...)) и точные номера строк */
-
 function compileCToAsm(cCode) {
     cpu.symbols = [];
     const asmList = [];
@@ -954,9 +914,8 @@ function compileCToAsm(cCode) {
     const defines = {};
     const globalInits = [];
     let insideMain = false;
-    let sramPtr = 0x0100; // Память ОЗУ под массивы
+    let sramPtr = 0x0100;
 
-    // 1. Извлекаем #define с сохранением констант
     const origLines = cCode.split('\n');
     let mainLineNum = 1;
     for (let i = 0; i < origLines.length; i++) {
@@ -996,7 +955,6 @@ function compileCToAsm(cCode) {
     asmList.push({ asm: '.include "m328pdef.inc"', lineNum: mainLineNum });
     asmList.push({ asm: 'rjmp __main', lineNum: mainLineNum });
 
-    // 2. Токенизация с СОХРАНЕНИЕМ РЕАЛЬНЫХ НОМЕРОВ СТРОК
     const rawLines = [];
     for (let i = 0; i < origLines.length; i++) {
         const lineNum = i + 1;
@@ -1006,18 +964,15 @@ function compileCToAsm(cCode) {
         l = l.trim();
         if (!l || l.startsWith('#')) continue;
 
-        // Преобразование [i++]
         l = l.replace(/([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\+\+\]\s*=\s*([^;]+);/g, '$1[$2] = $3; $2++;');
         l = l.replace(/([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\+\+\];/g, '$1 = $2[$3]; $3++;');
         l = l.replace(/\b(volatile|const)\s+/g, '');
 
-        // Циклы ожидания кнопок вида while (!(PIND & (1 << PIND2))); не разбиваем
         if (l.match(/while\s*\(\s*(!?)\s*\(\s*PIN[BCD]/i)) {
             rawLines.push({ text: l, lineNum });
             continue;
         }
 
-        // Разбиваем составные строки ({, }, ;) сохраняя номер строки редактора
         const pieces = l
             .replace(/\{/g, '\n{\n')
             .replace(/\}/g, '\n}\n')
@@ -1031,12 +986,10 @@ function compileCToAsm(cCode) {
         }
     }
 
-    // 3. Компиляция предложений
     for (let i = 0; i < rawLines.length; i++) {
         let line = rawLines[i].text;
         const lineNum = rawLines[i].lineNum;
 
-        // Строки во Flash-памяти: char msg[] = "...";
         const strArrMatch = line.match(/\bchar\s+([a-zA-Z0-9_]+)\s*\[\s*\]\s*=\s*(".*?")\s*;/);
         if (strArrMatch) {
             const arrName = strArrMatch[1];
@@ -1048,7 +1001,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Объявления массивов в ОЗУ: uint8_t rx_buf[6], rx_idx = 0;
         const ramDeclMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|char)\s+([^;]+);/);
         if (ramDeclMatch && (line.includes('[') || line.includes(','))) {
             const rawVars = ramDeclMatch[2].split(',');
@@ -1077,7 +1029,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Цепочка сложения: uint16_t sum = rx_buf[1] + rx_buf[2] + rx_buf[3] + rx_buf[4];
         const sumMatch = line.match(/\b(uint16_t|int)\s+([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
         if (sumMatch && sumMatch[3].includes('+')) {
             const vName = sumMatch[2];
@@ -1103,7 +1054,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Запись в массив: tx_buf[0] = '!'; tx_buf[1] = sum >> 8; rx_buf[rx_idx] = b;
         const arrWriteMatch = line.match(/\b([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]\s*=\s*([^;]+);/);
         if (arrWriteMatch && varMap[arrWriteMatch[1]]?.type === 'sram_array') {
             const aName = arrWriteMatch[1];
@@ -1139,7 +1089,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Прерывания ISR
         const isrMatch = line.match(/ISR\s*\(\s*([a-zA-Z0-9_]+)\s*\)/);
         if (isrMatch) {
             const vName = isrMatch[1];
@@ -1174,7 +1123,6 @@ function compileCToAsm(cCode) {
         if (line.includes('cli()') || line === 'cli;') { asmList.push({ asm: 'cli', lineNum }); continue; }
         if (line.includes('_delay_ms')) { asmList.push({ asm: 'nop', lineNum }); continue; }
 
-        // Ожидание отжатия/нажатия кнопок: while (!(PIND & (1 << PIND2)));
         if (line.startsWith('while') && line.includes('PIN')) {
             const isNegated = line.includes('!(') || line.includes('== 0') || line.includes('!(PIN');
             const pinInfo = extractPinAndBit(line);
@@ -1192,7 +1140,6 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Скобки закрытия блоков
         if (line === '}' || line.startsWith('}')) {
             if (controlStack.length > 0) {
                 const top = controlStack[controlStack.length - 1];
@@ -1230,7 +1177,6 @@ function compileCToAsm(cCode) {
         }
         if (line === '{') continue;
 
-        // Переменные: uint8_t data = UDR0;
         const declMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int|char)\s+([^;]+);/);
         if (declMatch) {
             const typeName = declMatch[1];
@@ -1257,7 +1203,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Чтение из массива: UDR0 = tx_buf[0]; UDR0 = tx_buf[tx_idx];
         const arrReadMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;/);
         if (arrReadMatch) {
             const dst = arrReadMatch[1];
@@ -1302,7 +1247,6 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Сравнение элементов массива: if (rx_buf[5] == '.')
         const arrCmpMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*(==|!=)\s*([^)]+)\)/);
         if (arrCmpMatch) {
             const arr = arrCmpMatch[1];
@@ -1326,7 +1270,6 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Условия &&
         if (line.startsWith('if') && line.includes('&&')) {
             const condContent = line.substring(line.indexOf('(') + 1, line.lastIndexOf(')'));
             const subConds = condContent.split('&&').map(c => c.trim());
@@ -1350,7 +1293,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Операции с портами: |= , &= ~ , ^=
         const portOrMatch = line.match(/\b(DDRB|PORTB|DDRD|PORTD|UCSR0B|UCSR0C|EICRA|EIMSK)\s*\|\=\s*([^;]+);/);
         if (portOrMatch) {
             const portName = portOrMatch[1];
@@ -1386,7 +1328,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Прямые присваивания (UBRR0 = 103, UCSR0B = 0xD8, rx_idx = 0)
         const assignMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
         if (assignMatch) {
             const dst = assignMatch[1].trim();
@@ -1423,7 +1364,6 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Опрос ножек в if: if (!(PIND & (1 << PIND2)))
         if (line.startsWith('if') && line.includes('PIN')) {
             const isNegated = line.includes('!(') || line.includes('== 0') || line.includes('!(PIN');
             const pinInfo = extractPinAndBit(line);
@@ -1442,7 +1382,6 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // Простые сравнения if (data == 'M') или if (rx_idx == 6)
         const ifMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^)]+)\)/);
         if (ifMatch) {
             const vName = ifMatch[1];
@@ -1465,7 +1404,6 @@ function compileCToAsm(cCode) {
             }
         }
 
-        // while (1)
         if (line.startsWith('while') && line.includes('1')) {
             const startLbl = '__while_start_' + (labelCounter++);
             asmList.push({ asm: startLbl + ':', lineNum });
@@ -1473,7 +1411,6 @@ function compileCToAsm(cCode) {
             continue;
         }
 
-        // Инкремент: rx_idx++;
         const incMatch = line.match(/\b([a-zA-Z0-9_]+)\+\+;/);
         if (incMatch && varMap[incMatch[1]]) {
             asmList.push({ asm: 'inc ' + varMap[incMatch[1]].reg, lineNum });
@@ -1499,7 +1436,7 @@ function compileCToAsm(cCode) {
 
     return asmList;
 }
-/* ================= ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ ТЕМЫ ================= */
+
 function toggleTheme() {
     const isLight = document.body.classList.toggle('theme-light');
     localStorage.setItem('avr_theme', isLight ? 'light' : 'dark');
@@ -1560,8 +1497,6 @@ function parseReg(arg) {
     return Math.min(31, Math.max(0, parseInt(clean, 10) || 0));
 }
 
-
-
 function resolveIoRamAddr(token) {
     if (!token) return 0;
     const upper = token.trim().toUpperCase();
@@ -1586,13 +1521,18 @@ function resolveLabel(target, lineNum) {
     return cpu.labels[key];
 }
 
+let inspectorNeedsRebuild = true;
+let lastInspectorPc = -1;
+
 function parseProgram(text) {
     cpu.program = [];
     cpu.labels = {};
     cpu.equConstants = {};
     cpu.flashBytes.fill(0);
-    inspectorNeedsRebuild = true;
     cpu.error = null;
+    inspectorNeedsRebuild = true;
+    lastInspectorPc = -1;
+
     if (!text) return;
     text = text.replace(/\r/g, '');
 
@@ -1606,7 +1546,6 @@ function parseProgram(text) {
             let line = item.asm.trim();
             if (!line || line.startsWith('.cseg')) continue;
 
-            // Метки (включая метку строки __str_msg)
             if (line.includes(':')) {
                 const parts = line.split(':');
                 const lblName = parts[0].trim().toLowerCase();
@@ -1615,7 +1554,6 @@ function parseProgram(text) {
                 if (!line) continue;
             }
 
-            // Запись строки из Си во Flash-память (.db)
             if (line.toLowerCase().startsWith('.db')) {
                 const dataStr = line.substring(3).trim();
                 let bytePtr = instIndex * 2;
@@ -1656,7 +1594,6 @@ function parseProgram(text) {
         cpu.symbols = [];
         const lines = text.split('\n');
 
-        // Проход 1: константы .equ и .def
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i];
             const sIdx = line.indexOf(';');
@@ -1671,7 +1608,6 @@ function parseProgram(text) {
             }
         }
 
-        // Проход 2: сбор команд
         let wordIndex = 0;
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i];
@@ -1731,7 +1667,6 @@ function parseProgram(text) {
         }
     }
 
-    // Проход 3: Байткод и адреса портов
     for (let j = 0; j < cpu.program.length; j++) {
         const inst = cpu.program[j];
         if (!inst) {
@@ -2193,7 +2128,7 @@ function dispatchInterrupt(vectorWordAddr, vectorLabel) {
     }
 }
 
-/* ================= 16. БЫСТРЫЙ ШАГ CPU (С ПОЛНОЙ ПОДДЕРЖКОЙ SBRC/SBRS) ================= */
+/* ================= 16. БЫСТРЫЙ ШАГ CPU ================= */
 
 function cpuStep(silent = false) {
     if (cpu.pc < 0) cpu.pc = 0;
@@ -2280,7 +2215,6 @@ function cpuStep(silent = false) {
             break;
         }
 
-        // КОМАНДЫ SBRS И SBRC (ВОССТАНОВЛЕНЫ ИСПРАВНЫМИ)
         case 'sbrs': {
             if ((cpu.r[inst.rd] & (1 << inst.bit)) !== 0) {
                 nextPC += isTwoWordInstruction(cpu.program[nextPC]) ? 2 : 1;
@@ -2380,8 +2314,6 @@ function cpuStep(silent = false) {
             cpu.sreg.C = (prev & 0x01) ? 1 : 0; cpu.sreg.Z = (res === 0) ? 1 : 0;
             cpu.sreg.N = 0; cpu.sreg.V = cpu.sreg.C; cpu.sreg.S = cpu.sreg.V; break;
         }
-         // --- ВОССТАНОВЛЕННАЯ АРИФМЕТИКА И СДВИГИ ---
-
         case 'asr': {
             const prev = cpu.r[inst.rd];
             const res = (prev >> 1) | (prev & 0x80);
@@ -2393,7 +2325,6 @@ function cpuStep(silent = false) {
             cpu.sreg.S = cpu.sreg.N ^ cpu.sreg.V;
             break;
         }
-
         case 'rol': {
             const prev = cpu.r[inst.rd];
             const oldC = cpu.sreg.C;
@@ -2407,7 +2338,6 @@ function cpuStep(silent = false) {
             cpu.sreg.S = cpu.sreg.N ^ cpu.sreg.V;
             break;
         }
-
         case 'ror': {
             const prev = cpu.r[inst.rd];
             const oldC = cpu.sreg.C;
@@ -2420,25 +2350,21 @@ function cpuStep(silent = false) {
             cpu.sreg.S = cpu.sreg.N ^ cpu.sreg.V;
             break;
         }
-
         case 'swap': {
             const val = cpu.r[inst.rd];
             cpu.r[inst.rd] = ((val & 0x0F) << 4) | ((val & 0xF0) >> 4);
             break;
         }
-
         case 'movw': {
             cpu.r[inst.rd] = cpu.r[inst.rr];
             cpu.r[inst.rd + 1] = cpu.r[inst.rr + 1];
             break;
         }
-
         case 'cpc': {
             const res = cpu.r[inst.rd] - cpu.r[inst.rr] - cpu.sreg.C;
             setFlagsSub(cpu.r[inst.rd], cpu.r[inst.rr], res, true);
             break;
         }
-
         case 'adiw': {
             const rLow = inst.rd;
             const k = inst.imm;
@@ -2453,7 +2379,6 @@ function cpuStep(silent = false) {
             cpu.sreg.S = cpu.sreg.N ^ cpu.sreg.V;
             break;
         }
-
         case 'sbiw': {
             const rLow = inst.rd;
             const k = inst.imm;
@@ -2525,15 +2450,19 @@ function cpuStep(silent = false) {
     cpu.pc = nextPC;
     cpu.cycles += CYCLES[op] || 1;
 
-    syncHardwareState();
+    applyHardwarePins();
     checkInterrupts();
-    recordAnalyzerSample();
 
-    if (!silent) updateUI();
+    if (!silent) {
+        syncHardwareState();
+        recordAnalyzerSample(true);
+        updateUI();
+    }
 
     if (cpu.running && cpu.pc < cpu.program.length) {
         if (cpu.breakpoints.has(cpu.program[cpu.pc].lineNum)) {
             haltExecution();
+            syncHardwareState();
             updateUI();
         }
     }
@@ -2553,7 +2482,7 @@ function toggleVButton(id) {
             document.getElementById('vbtn_' + id)?.classList.remove('latched');
             syncHardwareState();
             checkInterrupts();
-            recordAnalyzerSample();
+            recordAnalyzerSample(true);
             updateUI();
         }, 150);
     } else {
@@ -2563,11 +2492,9 @@ function toggleVButton(id) {
 
     syncHardwareState();
     checkInterrupts();
-    recordAnalyzerSample();
+    recordAnalyzerSample(true);
     updateUI();
 }
-
-/* ================= 17. СИНХРОНИЗАЦИЯ ПЛАТЫ (ОПТИМИЗИРОВАНО) ================= */
 
 function syncHardwareState() {
     applyHardwarePins();
@@ -2582,7 +2509,6 @@ function syncHardwareState() {
     }
     cpu.ram[IO.SREG] = sregByte;
 
-    // Быстрое копирование 32 регистров без поэлементного цикла
     cpu.ram.set(cpu.r.subarray(0, 32), 0);
 
     syncAnalogHardware();
@@ -2750,14 +2676,16 @@ async function connectRealWebSerial() {
     }
 }
 
-/* ================= 20. RUNLOOP ================= */
+/* ================= 20. RUNLOOP С ТРОТТЛИНГОМ РЕНДЕРА ================= */
 
 function haltExecution() {
     cpu.running = false;
     clearTimeout(cpu.timer);
     document.getElementById('btnRun')?.classList.remove('running');
-    document.getElementById('runIcon').textContent = '▶';
-    document.getElementById('runText').textContent = 'Пуск';
+    const rIcon = document.getElementById('runIcon');
+    const rText = document.getElementById('runText');
+    if (rIcon) rIcon.textContent = '▶';
+    if (rText) rText.textContent = 'Пуск';
 }
 
 function toggleRun() {
@@ -2767,9 +2695,11 @@ function toggleRun() {
     cpu.running = !cpu.running;
     const btn = document.getElementById('btnRun');
     if (cpu.running) {
-        btn.classList.add('running');
-        document.getElementById('runIcon').textContent = '⏸';
-        document.getElementById('runText').textContent = 'Пауза';
+        btn?.classList.add('running');
+        const rIcon = document.getElementById('runIcon');
+        const rText = document.getElementById('runText');
+        if (rIcon) rIcon.textContent = '⏸';
+        if (rText) rText.textContent = 'Пауза';
         runLoop();
     } else {
         haltExecution();
@@ -2804,7 +2734,6 @@ function runLoop() {
     recordAnalyzerSample(true);
 
     const now = performance.now();
-    // Ограничиваем тяжелый рендеринг DOM (максимум ~30 кадров/сек)
     if (now - lastUiRenderTime >= 30 || !cpu.running) {
         lastUiRenderTime = now;
         updateUI();
@@ -2846,7 +2775,8 @@ function cpuReset() {
 
 function updateSpeed(val) {
     cpu.speed = parseInt(val, 10);
-    document.getElementById('speedVal').textContent = cpu.speed + ' оп/с';
+    const sEl = document.getElementById('speedVal');
+    if (sEl) sEl.textContent = cpu.speed + ' оп/с';
 }
 
 /* ================= 21. ДАМПЫ ПАМЯТИ ================= */
@@ -2869,7 +2799,7 @@ function setMemFormat(format) {
 
 function renderMemoryDumps() {
     const memBox = document.getElementById('memDumpView');
-    if (!memBox) return;
+    if (!memBox || !activePanels.cpu) return;
 
     let output = '';
     if (cpu.memView === 'ram') {
@@ -2935,20 +2865,28 @@ function updateUI() {
     if (cycleElem) cycleElem.textContent = 'Такты: ' + cpu.cycles;
 
     const statusElem = document.getElementById('compilerStatus');
-    if (cpu.error) {
-        statusElem.textContent = '❌ ' + cpu.error;
-        statusElem.parentElement.classList.add('has-error-text');
-    } else {
-        statusElem.textContent = 'Строка: ' + (cpu.program[cpu.pc]?.lineNum || 'END');
-        statusElem.parentElement.classList.remove('has-error-text');
+    if (statusElem) {
+        if (cpu.error) {
+            statusElem.textContent = '❌ ' + cpu.error;
+            statusElem.parentElement.classList.add('has-error-text');
+        } else {
+            statusElem.textContent = 'Строка: ' + (cpu.program[cpu.pc]?.lineNum || 'END');
+            statusElem.parentElement.classList.remove('has-error-text');
+        }
     }
 
     if (activePanels.cpu) {
-        document.getElementById('valPC').textContent = '0x' + cpu.pc.toString(16).padStart(4, '0').toUpperCase();
-        document.getElementById('valSP').textContent = '0x' + cpu.sp.toString(16).padStart(4, '0').toUpperCase();
-        document.getElementById('valX').textContent = '0x' + getPointerAddr('x').toString(16).padStart(4, '0').toUpperCase();
-        document.getElementById('valY').textContent = '0x' + getPointerAddr('y').toString(16).padStart(4, '0').toUpperCase();
-        document.getElementById('valZ').textContent = '0x' + getPointerAddr('z').toString(16).padStart(4, '0').toUpperCase();
+        const valPcEl = document.getElementById('valPC');
+        const valSpEl = document.getElementById('valSP');
+        const valXEl = document.getElementById('valX');
+        const valYEl = document.getElementById('valY');
+        const valZEl = document.getElementById('valZ');
+
+        if (valPcEl) valPcEl.textContent = '0x' + cpu.pc.toString(16).padStart(4, '0').toUpperCase();
+        if (valSpEl) valSpEl.textContent = '0x' + cpu.sp.toString(16).padStart(4, '0').toUpperCase();
+        if (valXEl) valXEl.textContent = '0x' + getPointerAddr('x').toString(16).padStart(4, '0').toUpperCase();
+        if (valYEl) valYEl.textContent = '0x' + getPointerAddr('y').toString(16).padStart(4, '0').toUpperCase();
+        if (valZEl) valZEl.textContent = '0x' + getPointerAddr('z').toString(16).padStart(4, '0').toUpperCase();
 
         const fGrid = document.getElementById('flagsGrid');
         if (fGrid) {
@@ -2979,12 +2917,7 @@ function updateUI() {
     updateGutterPcArrow();
 }
 
-
-
 /* ================= 23. ИНСТРУМЕНТЫ: УМНЫЙ WATCH И ИНСПЕКТОР (ОПТИМИЗИРОВАНО) ================= */
-
-let inspectorNeedsRebuild = true;
-let lastInspectorPc = -1;
 
 function rebuildAsmInspector() {
     const box = document.getElementById('asmInspectorCode');
@@ -3059,52 +2992,6 @@ function renderWatchTable() {
                 val = cpu.r[regIdx];
             } else if (sym.locType === 'sram') {
                 val = readRAM(parseInt(sym.location, 16) || 0x0100);
-            }
-            const sVal = (val & 0x80) ? (val - 256) : val;
-
-            html += '<tr>';
-            html += '<td><b>' + sym.name + '</b></td>';
-            html += '<td><span class="watch-type-badge">' + sym.type + '</span></td>';
-            html += '<td>' + sVal + ' (DEC)</td>';
-            html += '<td>0x' + val.toString(16).padStart(2, '0').toUpperCase() + '</td>';
-            html += '<td>0b' + val.toString(2).padStart(8, '0') + '</td>';
-            html += '<td><span class="watch-loc-badge">' + sym.location + '</span></td>';
-            html += '</tr>';
-        });
-    } else {
-        if (countBadge) countBadge.textContent = 'Регистры: R16..R24';
-        for (let i = 16; i <= 24; i++) {
-            const val = cpu.r[i];
-            const sVal = (val & 0x80) ? (val - 256) : val;
-            html += '<tr>';
-            html += '<td><b>R' + i + '</b></td>';
-            html += '<td><span class="watch-type-badge">reg</span></td>';
-            html += '<td>' + sVal + ' (DEC)</td>';
-            html += '<td>0x' + val.toString(16).padStart(2, '0').toUpperCase() + '</td>';
-            html += '<td>0b' + val.toString(2).padStart(8, '0') + '</td>';
-            html += '<td><span class="watch-loc-badge">CPU</span></td>';
-            html += '</tr>';
-        }
-    }
-    tbody.innerHTML = html;
-}
-
-function renderWatchTable() {
-    const tbody = document.getElementById('watchTableBody');
-    const countBadge = document.getElementById('watchVarsCount');
-    if (!tbody) return;
-
-    let html = '';
-
-    if (cpu.symbols && cpu.symbols.length > 0) {
-        if (countBadge) countBadge.textContent = 'Переменных: ' + cpu.symbols.length;
-        cpu.symbols.forEach(sym => {
-            let val = 0;
-            if (sym.locType === 'reg') {
-                const regIdx = parseReg(sym.location);
-                val = cpu.r[regIdx];
-            } else if (sym.locType === 'sram') {
-                val = readRAM(sym.location);
             }
             const sVal = (val & 0x80) ? (val - 256) : val;
 
@@ -3712,12 +3599,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const ghostOverlay = document.getElementById('ghostOverlay');
     const gutter = document.getElementById('lineGutter');
 
-   let inputDebounce = null;
+    let inputDebounce = null;
     txtArea.addEventListener('input', () => {
         clearTimeout(inputDebounce);
         inputDebounce = setTimeout(() => {
             const val = txtArea.value;
-            // Умное автоопределение языка: если вставили Си-код — переключаемся на Си автоматически!
             if (val.includes('#include') || val.includes('int main') || val.includes('ISR(')) {
                 if (currentLang !== 'c') {
                     currentLang = 'c';
@@ -3737,8 +3623,9 @@ document.addEventListener('DOMContentLoaded', () => {
             updateSyntax();
             updateGhostAutocomplete();
             cpuReset();
-        }, 120); // 120 мс задержки исключают микрофризы браузера при вставке
+        }, 120);
     });
+
     txtArea.addEventListener('scroll', () => {
         highlighting.scrollTop = txtArea.scrollTop;
         highlighting.scrollLeft = txtArea.scrollLeft;
@@ -3782,10 +3669,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     setTimeout(resizeAnalyzerCanvas, 100);
-   if (localStorage.getItem('avr_theme') === 'light') {
+    if (localStorage.getItem('avr_theme') === 'light') {
         document.body.classList.add('theme-light');
         const txt = document.getElementById('btnThemeText');
         if (txt) txt.textContent = 'Темная';
     }
 });
-

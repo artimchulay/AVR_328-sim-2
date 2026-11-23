@@ -1,11 +1,12 @@
-
+﻿
 /* ==========================================================================
-   AVR ATmega328P Studio & Logic Analyzer Engine (script.js) - COMPLETE & OPTIMIZED
-   - Полное АЛУ AVR 100%: adiw, sbiw, cpc, sbrc, sbrs, asr, rol, ror, swap, movw, mul
-   - Порты и кнопки: in, out, sbi, cbi, |=, &= ~, ^=, корректный опрос while (!(PIN...))
-   - Память и массивы: Flash LPM (.db), SRAM (0x0100+), [i++], sum >> 8, & 0xFF
-   - Периферия: UART (RX, TX, UDRE), INT0, INT1, PCINT, АЦП, компаратор, LCD 1602, Web Serial
-   - Оптимизация: Кэшированный инспектор, легкий анализатор, троттлинг UI (2-5% CPU)
+   AVR ATmega328P Studio & Logic Analyzer Engine (script.js) - COMPLETE
+   - Шаг назад (cpuHistory + cpuStepBack + Shift+F11)
+   - Единое меню файлов (handleFileAction) и ручная скорость процессора
+   - Растягивание панелей вбок (.panel-resizer) + Drag-and-Drop + Zoom
+   - Автоотступы при переходе на новую строку и авто-сдвиг '}'
+   - Кремовая и тёмная темы (toggleTheme), шаблоны tpl_asm и tpl_c
+   - Полный компилятор Micro-C, парсер ASM, АЦП/SREG/UART/LCD и Intel HEX
    ========================================================================== */
 
 /* ================= 1. КАРТА РЕГИСТРОВ И ВЕКТОРОВ ================= */
@@ -14,8 +15,8 @@ const IO = {
     PINB:   0x23, DDRB:   0x24, PORTB:  0x25,
     PINC:   0x26, DDRC:   0x27, PORTC:  0x28,
     PIND:   0x29, DDRD:   0x2A, PORTD:  0x2B,
-    EECR:   0x3F, EEDR:   0x40, EEARL:  0x41, EEARH: 0x42,
-    TCCR0A: 0x44, TCCR0B: 0x45, TCNT0:  0x46, OCR0A: 0x47, OCR0B: 0x48,
+    EECR:   0x3F, EEDR:   0x40, EEARL:  0x41, EEARH:  0x42,
+    TCCR0A: 0x44, TCCR0B: 0x45, TCNT0:  0x46, OCR0A:  0x47, OCR0B:  0x48,
     PCIFR:  0x3B, EIFR:   0x3C, EIMSK:  0x3D,
     SPL:    0x5D, SPH:    0x5E, SREG:   0x5F,
     ACSR:   0x50,
@@ -57,7 +58,7 @@ const CYCLES = {
     breq: 1, brne: 1, brcs: 1, brcc: 1, brlo: 1, brsh: 1,
     brmi: 1, brpl: 1, brge: 1, brlt: 1, brhs: 1, brhc: 1, brts: 1, brtc: 1,
     brvs: 1, brvc: 1,
-    swap: 1, movw: 1, sbr: 1, cbr: 1
+    swap: 1, movw: 1, sbr: 1, cbr: 1, mulsu: 2, rcall: 3, brls: 1, brhi: 1, sleep: 1, wdr: 1
 };
 
 /* ================= 2. СОСТОЯНИЕ ПРОЦЕССОРА ================= */
@@ -75,6 +76,14 @@ const activePanels = {
     cpu: true,
     tools: false
 };
+
+const MAX_CPU_HISTORY = 300;
+let cpuHistory = [];
+let panelWeights = (function() {
+    try {
+        return JSON.parse(localStorage.getItem('avr_panel_weights')) || {};
+    } catch (e) { return {}; }
+})();
 
 const cpu = {
     r: new Uint8Array(32),
@@ -98,6 +107,7 @@ const cpu = {
     program: [],
     labels: {},
     equConstants: {},
+    defAliases: {},
     symbols: [],
     breakpoints: new Set(),
     syntaxErrors: new Map(),
@@ -128,24 +138,137 @@ const defaultButtons = [
 let vButtons = [...defaultButtons];
 let customIoComponents = [];
 
-/* ================= 3. ЗУМ И ИНТЕРФЕЙС ================= */
+/* ================= 3. ТЕМА, ЗУМ, РЕСАЙЗЕРЫ И ИНТЕРФЕЙС ================= */
+
+function toggleTheme() {
+    const isLight = document.body.classList.toggle('theme-light');
+    try { localStorage.setItem('avr_theme', isLight ? 'light' : 'dark'); } catch (e) {}
+    const txt = document.getElementById('btnThemeText');
+    if (txt) txt.textContent = isLight ? 'Темная' : 'Светлая';
+    drawLogicAnalyzer();
+}
 
 function applyAppZoom() {
     document.documentElement.style.setProperty('--app-zoom', appZoom);
     const zVal = document.getElementById('zoomVal');
     if (zVal) zVal.textContent = Math.round(appZoom * 100) + '%';
     try { localStorage.setItem('avr_app_zoom', appZoom); } catch(e) {}
-    setTimeout(resizeAnalyzerCanvas, 40);
+    applyPanelWeights();
+    requestAnimationFrame(() => setTimeout(resizeAnalyzerCanvas, 50));
 }
 
 function changeAppZoom(delta) {
-    appZoom = Math.min(1.8, Math.max(0.6, Math.round((appZoom + delta) * 10) / 10));
+    appZoom = Math.min(1.5, Math.max(0.6, Math.round((appZoom + delta) * 10) / 10));
     applyAppZoom();
 }
 
 function resetAppZoom() {
     appZoom = 1.0;
     applyAppZoom();
+}
+
+function applyPanelWeights() {
+    const isMobile = window.innerWidth <= 900;
+    PANEL_LIST.forEach(name => {
+        const p = document.getElementById('panel_' + name);
+        if (!p) return;
+        if (isMobile) {
+            p.style.flex = '';
+        } else {
+            const w = panelWeights[name] || 1;
+            p.style.flex = w + ' 1 0';
+        }
+    });
+}
+
+function savePanelWeights() {
+    try { localStorage.setItem('avr_panel_weights', JSON.stringify(panelWeights)); } catch(e) {}
+}
+
+function syncPanelResizers() {
+    const track = document.getElementById('panelsTrack');
+    if (!track) return;
+
+    track.querySelectorAll('.panel-resizer').forEach(r => r.remove());
+
+    if (window.innerWidth <= 900) {
+        applyPanelWeights();
+        return;
+    }
+
+    const visiblePanels = Array.from(track.querySelectorAll('.slide-panel'))
+        .filter(p => !p.classList.contains('panel-hidden'));
+
+    for (let i = 0; i < visiblePanels.length - 1; i++) {
+        const leftPanel = visiblePanels[i];
+        const rightPanel = visiblePanels[i + 1];
+        const resizer = document.createElement('div');
+        resizer.className = 'panel-resizer';
+        resizer.title = 'Потяните для изменения ширины (двойной клик — сбросить)';
+
+        resizer.addEventListener('dblclick', () => {
+            PANEL_LIST.forEach(name => { panelWeights[name] = 1; });
+            applyPanelWeights();
+            savePanelWeights();
+            resizeAnalyzerCanvas();
+        });
+
+        resizer.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            resizer.classList.add('active');
+            resizer.setPointerCapture(e.pointerId);
+
+            const leftId = leftPanel.getAttribute('data-panel-id');
+            const rightId = rightPanel.getAttribute('data-panel-id');
+            const startX = e.clientX;
+            const leftStartW = leftPanel.getBoundingClientRect().width;
+            const rightStartW = rightPanel.getBoundingClientRect().width;
+            const totalW = leftStartW + rightStartW;
+            const minW = Math.min(230 * appZoom, totalW * 0.4);
+
+            const wLeft0 = panelWeights[leftId] || 1;
+            const wRight0 = panelWeights[rightId] || 1;
+            const totalWeight = wLeft0 + wRight0;
+
+            let rafId = null;
+
+            const onMove = (ev) => {
+                const dx = ev.clientX - startX;
+                const newLeftW = Math.min(totalW - minW, Math.max(minW, leftStartW + dx));
+                const ratio = newLeftW / totalW;
+
+                panelWeights[leftId] = Math.max(0.2, totalWeight * ratio);
+                panelWeights[rightId] = Math.max(0.2, totalWeight * (1 - ratio));
+
+                leftPanel.style.flex = panelWeights[leftId] + ' 1 0';
+                rightPanel.style.flex = panelWeights[rightId] + ' 1 0';
+
+                if (!rafId) {
+                    rafId = requestAnimationFrame(() => {
+                        rafId = null;
+                        resizeAnalyzerCanvas();
+                    });
+                }
+            };
+
+            const onUp = () => {
+                resizer.classList.remove('active');
+                resizer.removeEventListener('pointermove', onMove);
+                resizer.removeEventListener('pointerup', onUp);
+                resizer.removeEventListener('pointercancel', onUp);
+                savePanelWeights();
+                resizeAnalyzerCanvas();
+            };
+
+            resizer.addEventListener('pointermove', onMove);
+            resizer.addEventListener('pointerup', onUp);
+            resizer.addEventListener('pointercancel', onUp);
+        });
+
+        leftPanel.insertAdjacentElement('afterend', resizer);
+    }
+
+    applyPanelWeights();
 }
 
 function togglePanel(panelName) {
@@ -168,8 +291,10 @@ function togglePanel(panelName) {
         if (pElem) pElem.classList.toggle('panel-hidden', !activePanels[panelName]);
         if (tBtn) tBtn.classList.toggle('active', activePanels[panelName]);
     }
-    if (panelName === 'analyzer' && activePanels.analyzer) {
-        setTimeout(resizeAnalyzerCanvas, 40);
+    syncPanelResizers();
+    if (activePanels[panelName]) {
+        updateUI();
+        if (panelName === 'analyzer') setTimeout(resizeAnalyzerCanvas, 40);
     }
 }
 
@@ -254,6 +379,7 @@ function initDragAndDrop() {
             document.querySelectorAll('.slide-panel').forEach(p => p.classList.remove('drag-over'));
             draggedPanel = null;
             savePanelOrder();
+            syncPanelResizers();
             setTimeout(resizeAnalyzerCanvas, 40);
         });
 
@@ -283,6 +409,7 @@ function initDragAndDrop() {
                 track.insertBefore(draggedPanel, panel);
             }
             savePanelOrder();
+            syncPanelResizers();
             setTimeout(resizeAnalyzerCanvas, 40);
         });
     });
@@ -306,18 +433,40 @@ const KNOWN_OPS = new Set([
     'bst','bld','sbi','cbi','sbis','sbic','lpm','mul','muls',
     'adiw','sbiw','st','ld','sts','lds','push','pop','jmp','rjmp','breq','brne','brcs','brcc',
     'brlo','brsh','brmi','brpl','brge','brlt','brhs','brhc','brts','brtc','brvs','brvc',
-    'call','ret','reti','sei','cli','in','out','break','nop'
+    'call','ret','reti','sei','cli','in','out','break','nop','mulsu','rcall','brls','brhi','sleep','wdr'
 ]);
 
 function validateSourceCode(text, lang) {
     cpu.syntaxErrors.clear();
     const lines = text.split('\n');
 
+    const defRegs = {};
+    if (lang === 'asm') {
+        for (let i = 0; i < lines.length; i++) {
+            const clean = lines[i].replace(/;.*$/, '').trim();
+            const dm = clean.match(/^\.def\s+([a-zA-Z0-9_]+)\s*=\s*r([0-9]+)/i);
+            if (dm) defRegs[dm[1].toLowerCase()] = parseInt(dm[2], 10);
+        }
+    }
+
     const braceStack = [];
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
+        let inString = false;
+        let inChar = false;
+
         for (let j = 0; j < line.length; j++) {
             const char = line[j];
+            const next = line[j + 1];
+
+            if (!inString && !inChar) {
+                if (lang === 'asm' && char === ';') break;
+                if (char === '/' && next === '/') break;
+            }
+            if (char === '"' && !inChar && line[j - 1] !== '\\') { inString = !inString; continue; }
+            if (char === "'" && !inString && line[j - 1] !== '\\') { inChar = !inChar; continue; }
+            if (inString || inChar) continue;
+
             if (char === '{' || char === '(' || char === '[') {
                 braceStack.push({ char, line: i + 1 });
             } else if (char === '}' || char === ')' || char === ']') {
@@ -356,9 +505,10 @@ function validateSourceCode(text, lang) {
                 if (KNOWN_OPS.has(op)) {
                     const argsStr = sub.substring(tokens[0].length).trim();
                     const args = argsStr ? argsStr.split(',').map(a => a.trim()) : [];
-                    if (op === 'ldi' && args.length >= 1) {
-                        const regNum = parseReg(args[0]);
-                        if (regNum < 16) cpu.syntaxErrors.set(i + 1, 'LDI не работает с R' + regNum + '. Разрешены R16..R31');
+                    if (['ldi', 'subi', 'sbci', 'andi', 'ori', 'cpi', 'sbr', 'cbr'].includes(op) && args.length >= 1) {
+                        const a0 = args[0].toLowerCase();
+                        const regNum = (defRegs[a0] !== undefined) ? defRegs[a0] : parseReg(args[0]);
+                        if (regNum < 16) cpu.syntaxErrors.set(i + 1, op.toUpperCase() + ' не работает с R' + regNum + '. Разрешены R16..R31');
                     }
                 }
             }
@@ -405,7 +555,8 @@ const DICT_ASM = [
     '.include "m328pdef.inc"', '.org 0x0000', '.org 0x0002', '.org 0x0024', '.cseg', '.db',
     'ldi', 'mov', 'add', 'adc', 'sub', 'subi', 'rjmp', 'jmp', 'call', 'ret', 'reti',
     'in', 'out', 'sts', 'lds', 'lpm', 'bst', 'brtc', 'brts', 'cpi', 'breq', 'brne',
-    'sbrc', 'sbrs', 'sbic', 'sbis', 'sbi', 'cbi',
+    'sbrc', 'sbrs', 'sbic', 'sbis', 'sbi', 'cbi', 'muls', 'mulsu', 'rcall', 'sbr', 'cbr',
+    'brge', 'brlt', 'brvs', 'brvc', 'brhs', 'brhc', 'brls', 'brhi', 'adiw', 'sbiw', 'sleep', 'wdr',
     'sei', 'cli', 'nop', 'break', 'low(Msg<<1)', 'high(Msg<<1)',
     ...COMMON_REGISTERS
 ];
@@ -773,7 +924,7 @@ function resizeAnalyzerCanvas() {
     const activeChannels = ALL_CHANNELS.filter(c => selectedChannelIds.has(c.id));
     const trackHeight = 32;
     const requiredH = Math.max(wrapper.clientHeight - 4, activeChannels.length * trackHeight + 20);
-    const requiredW = Math.max(wrapper.clientWidth - 4, 600);
+    const requiredW = Math.max(wrapper.clientWidth - 4, 420);
 
     canvas.width = requiredW;
     canvas.height = requiredH;
@@ -791,7 +942,8 @@ function drawLogicAnalyzer() {
     const w = canvas.width;
     const h = canvas.height;
 
-    ctx.fillStyle = '#040508';
+    const isLight = document.body.classList.contains('theme-light');
+    ctx.fillStyle = isLight ? '#fffef8' : '#07090e';
     ctx.fillRect(0, 0, w, h);
 
     const activeList = ALL_CHANNELS.filter(c => selectedChannelIds.has(c.id));
@@ -807,7 +959,7 @@ function drawLogicAnalyzer() {
         const highY = baseY;
         const lowY  = baseY + trackHeight - 12;
 
-        ctx.strokeStyle = '#151c28';
+        ctx.strokeStyle = isLight ? '#e2dac0' : '#18202e';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(90, lowY);
@@ -852,31 +1004,38 @@ function drawLogicAnalyzer() {
         ctx.stroke();
     });
 }
-/* ================= 10. КОМПИЛЯТОР MICRO-C (ФИНАЛЬНЫЙ) ================= */
+
+/* ================= 10. КОМПИЛЯТОР MICRO-C ================= */
 const AVR_CONSTS = {
-ISC00: 0, ISC01: 1, ISC10: 2, ISC11: 3,
-INT0: 0, INT1: 1, PCIE0: 0, PCIE1: 1, PCIE2: 2,
-TXEN0: 3, RXEN0: 4, UDRIE0: 5, TXCIE0: 6, RXCIE0: 7,
-UCSZ00: 1, UCSZ01: 2, UCSZ02: 2, U2X0: 1, DOR0: 3, FE0: 4, UDRE0: 5, TXC0: 6, RXC0: 7,
-PD0: 0, PD1: 1, PD2: 2, PD3: 3, PD4: 4, PD5: 5, PD6: 6, PD7: 7,
-PB0: 0, PB1: 1, PB2: 2, PB3: 3, PB4: 4, PB5: 5, PB6: 6, PB7: 7,
-PC0: 0, PC1: 1, PC2: 2, PC3: 3, PC4: 4, PC5: 5, PC6: 6, PC7: 7,
-ACD: 7, ACBG: 6, ACO: 5, ACI: 4, ACIE: 3, ACIC: 2, ACIS1: 1, ACIS0: 0,
-ADEN: 7, ADSC: 6, ADATE: 5, ADIF: 4, ADIE: 3, ADPS2: 2, ADPS1: 1, ADPS0: 0,
-REFS1: 7, REFS0: 6, ADLAR: 5
+    ISC00: 0, ISC01: 1, ISC10: 2, ISC11: 3,
+    INT0: 0, INT1: 1, PCIE0: 0, PCIE1: 1, PCIE2: 2,
+    TXEN0: 3, RXEN0: 4, UDRIE0: 5, TXCIE0: 6, RXCIE0: 7,
+    UCSZ00: 1, UCSZ01: 2, UCSZ02: 2, U2X0: 1, DOR0: 3, FE0: 4, UDRE0: 5, TXC0: 6, RXC0: 7,
+    PD0: 0, PD1: 1, PD2: 2, PD3: 3, PD4: 4, PD5: 5, PD6: 6, PD7: 7,
+    PORTD0: 0, PORTD1: 1, PORTD2: 2, PORTD3: 3, PORTD4: 4, PORTD5: 5, PORTD6: 6, PORTD7: 7,
+    DDD0: 0, DDD1: 1, DDD2: 2, DDD3: 3, DDD4: 4, DDD5: 5, DDD6: 6, DDD7: 7,
+    PIND0: 0, PIND1: 1, PIND2: 2, PIND3: 3, PIND4: 4, PIND5: 5, PIND6: 6, PIND7: 7,
+    PB0: 0, PB1: 1, PB2: 2, PB3: 3, PB4: 4, PB5: 5, PB6: 6, PB7: 7,
+    PORTB0: 0, PORTB1: 1, PORTB2: 2, PORTB3: 3, PORTB4: 4, PORTB5: 5, PORTB6: 6, PORTB7: 7,
+    DDB0: 0, DDB1: 1, DDB2: 2, DDB3: 3, DDB4: 4, DDB5: 5, DDB6: 6, DDB7: 7,
+    PINB0: 0, PINB1: 1, PINB2: 2, PINB3: 3, PINB4: 4, PINB5: 5, PINB6: 6, PINB7: 7,
+    PC0: 0, PC1: 1, PC2: 2, PC3: 3, PC4: 4, PC5: 5, PC6: 6, PC7: 7,
+    PORTC0: 0, PORTC1: 1, PORTC2: 2, PORTC3: 3, PORTC4: 4, PORTC5: 5, PORTC6: 6, PORTC7: 7,
+    DDC0: 0, DDC1: 1, DDC2: 2, DDC3: 3, DDC4: 4, DDC5: 5, DDC6: 6, DDC7: 7,
+    PINC0: 0, PINC1: 1, PINC2: 2, PINC3: 3, PINC4: 4, PINC5: 5, PINC6: 6, PINC7: 7,
+    ACD: 7, ACBG: 6, ACO: 5, ACI: 4, ACIE: 3, ACIC: 2, ACIS1: 1, ACIS0: 0,
+    ADEN: 7, ADSC: 6, ADATE: 5, ADIF: 4, ADIE: 3, ADPS2: 2, ADPS1: 1, ADPS0: 0,
+    REFS1: 7, REFS0: 6, ADLAR: 5
 };
 const AVR_CONSTS_KEYS = Object.keys(AVR_CONSTS).sort((a,b) => b.length - a.length);
 const AVR_CONSTS_REGEX = new RegExp('\\b(' + AVR_CONSTS_KEYS.join('|') + ')\\b', 'g');
+const RW_PORTS = ['PORTB','PORTC','PORTD','DDRB','DDRC','DDRD','UCSR0A','UCSR0B','UCSR0C','EICRA','EIMSK','PCICR','PCMSK0','PCMSK1','PCMSK2','ACSR','ADCSRA','ADCSRB','ADMUX'];
+const READ_REGS = ['PINB','PINC','PIND','UDR0','UCSR0A','ADCL','ADCH','ACSR','EIFR','PCIFR'];
+const RW_PORTS_REGEX = new RegExp('\\b(' + RW_PORTS.join('|') + ')\\s*\\|\\=\\s*([^;]+);');
+const AND_NOT_REGEX = new RegExp('\\b(' + RW_PORTS.join('|') + ')\\s*&\\=\\s*~([^;]+);');
+const XOR_REGEX = new RegExp('\\b(' + RW_PORTS.join('|') + ')\\s*\\^\\=\\s*([^;]+);');
 
-// Регистры, к которым обращаются через STS/LDS (расширенный сегмент >= 0x60)
-const EXTENDED_PORTS = ['UCSR0A','UCSR0B','UCSR0C','UBRR0L','UBRR0H','UDR0','EICRA','PCICR','PCMSK0','PCMSK1','PCMSK2','ADCSRA','ADCSRB','ADMUX','ACSR'];
-// Все порты, доступные для записи
-const ALL_PORTS = ['PORTB','PORTC','PORTD','DDRB','DDRC','DDRD','UCSR0B','UCSR0C','UDR0','EICRA','EIMSK','PCICR','PCMSK0','PCMSK1','PCMSK2'];
-// Регистры для чтения через IN/LDS
-const READ_PORTS = ['PINB','PINC','PIND','UDR0','UCSR0A','EICRA','EIMSK','PCICR','PCMSK0','PCMSK1','PCMSK2','ADCSRA','ADMUX','ACSR'];
-
-// varMap — ГЛОБАЛЬНАЯ, чтобы emit-функции видели её
-let varMap = {};
+function isExtReg(name) { return IO[name] !== undefined && IO[name] >= 0x60; }
 
 function evaluateCExpression(expr, defines) {
     if (!expr) return null;
@@ -893,182 +1052,312 @@ function evaluateCExpression(expr, defines) {
     catch (e) { return null; }
 }
 
-function parseArrayAccess(expr) {
-    const m = expr.match(/^([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]$/);
-    if (m) return { arr: m[1], idx: m[2] };
-    return null;
-}
-
-// Чтение символа из строки во Flash по индексу -> результат в r16
-function emitStringRead(arrName, idxToken, lineNum, asmList) {
-    const lbl = varMap[arrName].label;
-    if (/^\d+$/.test(idxToken)) {
-        const offset = parseInt(idxToken, 10);
-        asmList.push({ asm: 'ldi zl, low((' + lbl + ' << 1) + ' + offset + ')', lineNum });
-        asmList.push({ asm: 'ldi zh, high((' + lbl + ' << 1) + ' + offset + ')', lineNum });
-    } else if (varMap[idxToken]) {
-        asmList.push({ asm: 'ldi zl, low(' + lbl + ' << 1)', lineNum });
-        asmList.push({ asm: 'ldi zh, high(' + lbl + ' << 1)', lineNum });
-        asmList.push({ asm: 'add zl, ' + varMap[idxToken].reg, lineNum });
-        asmList.push({ asm: 'clr r16', lineNum });
-        asmList.push({ asm: 'adc zh, r16', lineNum });
-    }
-    asmList.push({ asm: 'lpm r16, Z', lineNum });
-}
-
-// Чтение из SRAM-массива по индексу -> результат в r16
-function emitSramRead(arrName, idxToken, lineNum, asmList) {
-    const baseAddr = varMap[arrName].addr;
-    if (/^\d+$/.test(idxToken)) {
-        asmList.push({ asm: 'lds r16, ' + (baseAddr + parseInt(idxToken, 10)), lineNum });
-    } else if (varMap[idxToken]) {
-        asmList.push({ asm: 'ldi xl, low(' + baseAddr + ')', lineNum });
-        asmList.push({ asm: 'ldi xh, high(' + baseAddr + ')', lineNum });
-        asmList.push({ asm: 'add xl, ' + varMap[idxToken].reg, lineNum });
-        asmList.push({ asm: 'clr r1', lineNum });
-        asmList.push({ asm: 'adc xh, r1', lineNum });
-        asmList.push({ asm: 'ld r16, X', lineNum });
-    }
-}
-
-// Чтение из порта (PINx, UDR0...) -> результат в r16
-function emitPortRead(portName, lineNum, asmList) {
-    const isExt = EXTENDED_PORTS.includes(portName);
-    asmList.push({ asm: (isExt ? 'lds ' : 'in ') + 'r16, ' + portName, lineNum });
-}
-
-// Запись в порт из выражения src
-function emitPortWrite(portName, srcExpr, lineNum, asmList) {
-    const isExt = EXTENDED_PORTS.includes(portName);
-    const storeCmd = isExt ? 'sts' : 'out';
-    const arrAccess = parseArrayAccess(srcExpr);
-    if (arrAccess && varMap[arrAccess.arr]?.type === 'string_array') {
-        emitStringRead(arrAccess.arr, arrAccess.idx, lineNum, asmList);
-        asmList.push({ asm: storeCmd + ' ' + portName + ', r16', lineNum });
-        return;
-    }
-    if (arrAccess && varMap[arrAccess.arr]?.type === 'sram_array') {
-        emitSramRead(arrAccess.arr, arrAccess.idx, lineNum, asmList);
-        asmList.push({ asm: storeCmd + ' ' + portName + ', r16', lineNum });
-        return;
-    }
-    if (READ_PORTS.includes(srcExpr.toUpperCase())) {
-        emitPortRead(srcExpr.toUpperCase(), lineNum, asmList);
-        asmList.push({ asm: storeCmd + ' ' + portName + ', r16', lineNum });
-        return;
-    }
-    if (varMap[srcExpr]) {
-        asmList.push({ asm: storeCmd + ' ' + portName + ', ' + varMap[srcExpr].reg, lineNum });
-        return;
-    }
-    const cVal = evaluateCExpression(applyDefinesStatic(srcExpr), {});
-    if (cVal !== null) {
-        asmList.push({ asm: 'ldi r16, ' + (cVal & 0xFF), lineNum });
-        asmList.push({ asm: storeCmd + ' ' + portName + ', r16', lineNum });
-    }
-}
-
-function applyDefinesStatic(str) {
-    return str.replace(AVR_CONSTS_REGEX, m => AVR_CONSTS[m]);
+function scaleThreshold(val) {
+    if (val === null || val === undefined) return 0;
+    if (val >= 10000) return Math.max(5, Math.round(val / 20000));
+    return (val < 0) ? (val & 0xFF) : Math.min(255, val);
 }
 
 function compileCToAsm(cCode) {
     cpu.symbols = [];
-    varMap = {};          // сброс глобальной карты
     const asmList = [];
-    let regCounter = 17;
+    let regCounter = 18;
+    function allocVarReg() {
+        if (regCounter <= 25) return 'r' + (regCounter++);
+        cpu.error = 'Превышен лимит локальных переменных C (макс. 8 в R18..R25)';
+        return 'r25';
+    }
+    const varMap = {};
     let labelCounter = 1;
     const controlStack = [];
     const defines = {};
     const globalInits = [];
     let insideMain = false;
+    let insideIsr = false;
     let sramPtr = 0x0100;
     const origLines = cCode.split('\n');
-    let mainLineNum = 1;
-
+    const srcLines = [];
     for (let i = 0; i < origLines.length; i++) {
-        if (origLines[i].includes('main(')) mainLineNum = i + 1;
-        const defMatch = origLines[i].match(/^#define\s+([a-zA-Z0-9_]+)\s+(.+)$/);
-        if (defMatch) defines[defMatch[1]] = defMatch[2].replace(/UL|U|L/gi, '').trim();
+        let text = origLines[i];
+        const start = i + 1;
+        while (((text.match(/"/g) || []).length % 2) === 1 && i + 1 < origLines.length) {
+            text += '\\n' + origLines[++i];
+        }
+        srcLines.push({ text, lineNum: start });
     }
-
+    let mainLineNum = 1;
+    for (const sl of srcLines) {
+        if (sl.text.includes('main(')) mainLineNum = sl.lineNum;
+        const cleanDef = sl.text.replace(/\/\/.*$/, '');
+        const d = cleanDef.match(/^#define\s+([a-zA-Z0-9_]+)\s+(.+)$/);
+        if (d) defines[d[1]] = d[2].replace(/UL|U|L/gi, '').trim();
+    }
+    function push(asm, lineNum) { asmList.push({ asm, lineNum }); }
     function applyDefines(str) {
         for (const [k, v] of Object.entries(defines)) {
             str = str.replace(new RegExp('\\b' + k + '\\b', 'g'), v);
         }
         return str;
     }
-
     function extractPinAndBit(expr) {
         const portMatch = expr.match(/(PIN[BCD])/i);
         if (!portMatch) return null;
+        const port = portMatch[1].toUpperCase();
         let bit = 0;
         const shiftMatch = expr.match(/1\s*<<\s*([a-zA-Z0-9_]+)/i);
         if (shiftMatch) {
             bit = evaluateCExpression(applyDefines(shiftMatch[1]), defines);
             if (bit === null || isNaN(bit)) bit = 0;
+        } else {
+            const hexMatch = expr.match(/&\s*(0x[0-9a-fA-F]+|\d+)/i);
+            if (hexMatch) {
+                const mask = evaluateCExpression(hexMatch[1], defines) || 1;
+                bit = Math.max(0, Math.round(Math.log2(mask)));
+            }
         }
-        return { port: portMatch[1].toUpperCase(), bit };
+        return { port, bit };
     }
-
-    asmList.push({ asm: '.include "m328pdef.inc"', lineNum: mainLineNum });
-    asmList.push({ asm: 'rjmp __main', lineNum: mainLineNum });
-
+    function emitArrRead(arr, idxToken, lineNum) {
+        const info = varMap[arr];
+        if (!info) return false;
+        if (info.type === 'sram_array') {
+            if (/^\d+$/.test(idxToken)) {
+                push('lds r16, ' + (info.addr + parseInt(idxToken, 10)), lineNum);
+            } else if (varMap[idxToken]) {
+                push('ldi xl, low(' + info.addr + ')', lineNum);
+                push('ldi xh, high(' + info.addr + ')', lineNum);
+                push('add xl, ' + varMap[idxToken].reg, lineNum);
+                push('clr r1', lineNum);
+                push('adc xh, r1', lineNum);
+                push('ld r16, X', lineNum);
+            } else return false;
+            return true;
+        }
+        if (info.type === 'string_array') {
+            if (/^\d+$/.test(idxToken)) {
+                push('ldi zl, low((' + info.label + ' << 1) + ' + idxToken + ')', lineNum);
+                push('ldi zh, high((' + info.label + ' << 1) + ' + idxToken + ')', lineNum);
+            } else if (varMap[idxToken]) {
+                push('ldi zl, low(' + info.label + ' << 1)', lineNum);
+                push('ldi zh, high(' + info.label + ' << 1)', lineNum);
+                push('add zl, ' + varMap[idxToken].reg, lineNum);
+                push('clr r16', lineNum);
+                push('adc zh, r16', lineNum);
+            } else return false;
+            push('lpm r16, Z', lineNum);
+            return true;
+        }
+        return false;
+    }
+    function emitStore(dst, lineNum) {
+        push((isExtReg(dst) ? 'sts ' : 'out ') + dst + ', r16', lineNum);
+    }
+    function emitCondBranch(op, lblFalse, lineNum) {
+        if (op === '==') push('brne ' + lblFalse, lineNum);
+        else if (op === '!=') push('breq ' + lblFalse, lineNum);
+        else if (op === '>=') push('brlo ' + lblFalse, lineNum);
+        else if (op === '<') push('brsh ' + lblFalse, lineNum);
+        else if (op === '>') { push('breq ' + lblFalse, lineNum); push('brlo ' + lblFalse, lineNum); }
+        else if (op === '<=') {
+            const skip = '__lbl_skip_' + (labelCounter++);
+            push('breq ' + skip, lineNum);
+            push('brsh ' + lblFalse, lineNum);
+            push(skip + ':', lineNum);
+        }
+    }
+    function isrPrologue(lineNum) {
+        push('push r16', lineNum);
+        push('push r17', lineNum);
+        push('in r16, SREG', lineNum);
+        push('push r16', lineNum);
+    }
+    function isrEpilogue(lineNum) {
+        push('pop r16', lineNum);
+        push('out SREG, r16', lineNum);
+        push('pop r17', lineNum);
+        push('pop r16', lineNum);
+        push('reti', lineNum);
+    }
+    function splitInline(piece) {
+        if (/^else\b/.test(piece) && !/^else\s+if\b/.test(piece)) {
+            const rest = piece.substring(4).trim();
+            if (rest && !rest.startsWith('{')) return ['else', '{', rest, '}'];
+            return [piece];
+        }
+        if (!/^(if|while)\s*\(/.test(piece)) return [piece];
+        let depth = 0, end = -1;
+        for (let i = piece.indexOf('('); i < piece.length; i++) {
+            if (piece[i] === '(') depth++;
+            else if (piece[i] === ')') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        if (end === -1) return [piece];
+        const rest = piece.substring(end + 1).trim();
+        if (!rest || rest === ';' || rest.startsWith('{')) return [piece];
+        return [piece.substring(0, end + 1), '{', rest, '}'];
+    }
+    push('.include "m328pdef.inc"', mainLineNum);
+    push('rjmp __main', mainLineNum);
     const rawLines = [];
-    for (let i = 0; i < origLines.length; i++) {
-        const lineNum = i + 1;
-        let l = origLines[i];
+    for (const sl of srcLines) {
+        const lineNum = sl.lineNum;
+        let l = sl.text;
         const cIdx = l.indexOf('//');
         if (cIdx !== -1) l = l.substring(0, cIdx);
         l = l.trim();
         if (!l || l.startsWith('#')) continue;
+        l = l.replace(/\bPCICR0\b/g, 'PCICR');
         l = l.replace(/([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\+\+\]\s*=\s*([^;]+);/g, '$1[$2] = $3; $2++;');
         l = l.replace(/([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\+\+\];/g, '$1 = $2[$3]; $3++;');
         l = l.replace(/\b(volatile|const)\s+/g, '');
         if (l.match(/while\s*\(\s*(!?)\s*\(\s*PIN[BCD]/i)) { rawLines.push({ text: l, lineNum }); continue; }
         const pieces = l.replace(/\{/g, '\n{\n').replace(/\}/g, '\n}\n').replace(/;/g, ';\n')
             .split('\n').map(p => p.trim()).filter(Boolean);
-        for (let p of pieces) rawLines.push({ text: p, lineNum });
+        for (let p of pieces) {
+            for (let sp of splitInline(p)) rawLines.push({ text: sp, lineNum });
+        }
     }
+
+    function isBlockHeader(t) {
+        if (t === 'else') return true;
+        if (/^(if|else\s+if|while)\s*\(/.test(t) && !t.endsWith(';')) return true;
+        return false;
+    }
+    function wrapSingleBodies(arr) {
+        function parseOne(idx) {
+            if (idx >= arr.length) return { nodes: [], nextIdx: idx };
+            const item = arr[idx];
+            if (item.text === '{') {
+                const nodes = [item];
+                let k = idx + 1;
+                while (k < arr.length && arr[k].text !== '}') {
+                    const res = parseOne(k);
+                    nodes.push(...res.nodes);
+                    k = res.nextIdx;
+                }
+                if (k < arr.length && arr[k].text === '}') {
+                    nodes.push(arr[k]);
+                    k++;
+                }
+                return { nodes, nextIdx: k };
+            }
+            if (isBlockHeader(item.text)) {
+                const nodes = [item];
+                let k = idx + 1;
+                if (k < arr.length && arr[k].text === '{') {
+                    const res = parseOne(k);
+                    nodes.push(...res.nodes);
+                    k = res.nextIdx;
+                } else if (k < arr.length) {
+                    const res = parseOne(k);
+                    nodes.push({ text: '{', lineNum: item.lineNum }, ...res.nodes, { text: '}', lineNum: item.lineNum });
+                    k = res.nextIdx;
+                }
+                return { nodes, nextIdx: k };
+            }
+            return { nodes: [item], nextIdx: idx + 1 };
+        }
+        const out = [];
+        let p = 0;
+        while (p < arr.length) {
+            const res = parseOne(p);
+            out.push(...res.nodes);
+            p = res.nextIdx;
+        }
+        return out;
+    }
+    const normalizedLines = wrapSingleBodies(rawLines);
+    rawLines.length = 0;
+    rawLines.push(...normalizedLines);
 
     for (let i = 0; i < rawLines.length; i++) {
         let line = rawLines[i].text;
         const lineNum = rawLines[i].lineNum;
-
-        // Строка во Flash
         const strArrMatch = line.match(/\bchar\s+([a-zA-Z0-9_]+)\s*\[\s*\]\s*=\s*(".*?")\s*;/);
         if (strArrMatch) {
             const strLbl = '__str_' + strArrMatch[1];
-            asmList.push({ asm: '.cseg', lineNum });
-            asmList.push({ asm: strLbl + ': .db ' + strArrMatch[2] + ', 0', lineNum });
+            push('.cseg', lineNum);
+            push(strLbl + ': .db ' + strArrMatch[2] + ', 0', lineNum);
             varMap[strArrMatch[1]] = { type: 'string_array', label: strLbl };
             continue;
         }
-
-        // Объявления (SRAM-массивы и переменные через запятую)
         const ramDeclMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|char)\s+([^;]+);/);
         if (ramDeclMatch && (line.includes('[') || line.includes(','))) {
             for (let vItem of ramDeclMatch[2].split(',')) {
                 vItem = vItem.trim();
                 const arrDef = vItem.match(/([a-zA-Z0-9_]+)\s*\[\s*(\d+)\s*\]/);
                 if (arrDef) {
-                    varMap[arrDef[1]] = { type: 'sram_array', addr: sramPtr, size: parseInt(arrDef[2], 10) };
-                    cpu.symbols.push({ name: arrDef[1], type: 'uint8_t[' + arrDef[2] + ']', size: parseInt(arrDef[2], 10), locType: 'sram', location: '0x' + sramPtr.toString(16).toUpperCase() });
-                    sramPtr += parseInt(arrDef[2], 10);
+                    const aSize = parseInt(arrDef[2], 10);
+                    varMap[arrDef[1]] = { type: 'sram_array', addr: sramPtr, size: aSize };
+                    cpu.symbols.push({ name: arrDef[1], type: 'uint8_t[' + aSize + ']', size: aSize, locType: 'sram', location: '0x' + sramPtr.toString(16).toUpperCase() });
+                    sramPtr += aSize;
                 } else {
                     const p = vItem.split('=');
-                    const reg = 'r' + (regCounter++);
-                    varMap[p[0].trim()] = { reg, type: 'uint8_t', size: 1 };
-                    cpu.symbols.push({ name: p[0].trim(), type: 'uint8_t', size: 1, locType: 'reg', location: reg.toUpperCase() });
-                    const constVal = evaluateCExpression(applyDefines(p[1] ? p[1].trim() : '0'), defines);
-                    const inst = { asm: 'ldi ' + reg + ', ' + ((constVal !== null ? constVal : 0) & 0xFF), lineNum };
-                    if (!insideMain) globalInits.push(inst); else asmList.push(inst);
+                    const vName = p[0].trim();
+                    const initVal = p[1] ? p[1].trim() : '0';
+                    const reg = allocVarReg();
+                    varMap[vName] = { reg, type: 'uint8_t', size: 1 };
+                    cpu.symbols.push({ name: vName, type: 'uint8_t', size: 1, locType: 'reg', location: reg.toUpperCase() });
+                    let inst;
+                    if (READ_REGS.includes(initVal)) inst = { asm: (isExtReg(initVal) ? 'lds ' : 'in ') + reg + ', ' + initVal, lineNum };
+                    else {
+                        const cv = evaluateCExpression(applyDefines(initVal), defines);
+                        inst = { asm: 'ldi ' + reg + ', ' + ((cv !== null ? cv : 0) & 0xFF), lineNum };
+                    }
+                    if (!insideMain && !insideIsr) globalInits.push(inst); else asmList.push(inst);
                 }
             }
             continue;
         }
-
-        // ISR
+        const sumMatch = line.match(/\b(uint16_t|int)\s+([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
+        if (sumMatch && sumMatch[3].includes('+')) {
+            const vName = sumMatch[2];
+            const terms = sumMatch[3].split('+').map(t => t.trim());
+            const regLow = allocVarReg();
+            const regHigh = allocVarReg();
+            varMap[vName] = { regLow, regHigh, type: 'uint16_t', size: 2 };
+            cpu.symbols.push({ name: vName, type: 'uint16_t', size: 2, locType: 'reg', location: regLow.toUpperCase() + ':' + regHigh.toUpperCase() });
+            push('clr ' + regLow, lineNum);
+            push('clr ' + regHigh, lineNum);
+            push('clr r1', lineNum);
+            for (let term of terms) {
+                const elemMatch = term.match(/([a-zA-Z0-9_]+)\[(\d+)\]/);
+                if (elemMatch && varMap[elemMatch[1]]?.type === 'sram_array') {
+                    push('lds r16, ' + (varMap[elemMatch[1]].addr + parseInt(elemMatch[2], 10)), lineNum);
+                    push('add ' + regLow + ', r16', lineNum);
+                    push('adc ' + regHigh + ', r1', lineNum);
+                }
+            }
+            continue;
+        }
+        const arrWriteMatch = line.match(/\b([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]\s*=\s*([^;]+);/);
+        if (arrWriteMatch && varMap[arrWriteMatch[1]]?.type === 'sram_array') {
+            const idxToken = arrWriteMatch[2];
+            const expr = arrWriteMatch[3].trim();
+            const baseAddr = varMap[arrWriteMatch[1]].addr;
+            if (expr.includes('>> 8')) {
+                const varSrc = expr.replace('>> 8', '').trim();
+                if (varMap[varSrc]?.regHigh) push('mov r16, ' + varMap[varSrc].regHigh, lineNum);
+            } else if (expr.includes('& 0xFF') || expr.includes('& 255')) {
+                const varSrc = expr.replace(/&.+/, '').trim();
+                if (varMap[varSrc]?.regLow) push('mov r16, ' + varMap[varSrc].regLow, lineNum);
+            } else if (varMap[expr]) {
+                push('mov r16, ' + varMap[expr].reg, lineNum);
+            } else {
+                const cVal = evaluateCExpression(applyDefines(expr), defines);
+                push('ldi r16, ' + ((cVal !== null ? cVal : 0) & 0xFF), lineNum);
+            }
+            if (/^\d+$/.test(idxToken)) {
+                push('sts ' + (baseAddr + parseInt(idxToken, 10)) + ', r16', lineNum);
+            } else if (varMap[idxToken]) {
+                push('ldi xl, low(' + baseAddr + ')', lineNum);
+                push('ldi xh, high(' + baseAddr + ')', lineNum);
+                push('add xl, ' + varMap[idxToken].reg, lineNum);
+                push('clr r1', lineNum);
+                push('adc xh, r1', lineNum);
+                push('st X, r16', lineNum);
+            }
+            continue;
+        }
         const isrMatch = line.match(/ISR\s*\(\s*([a-zA-Z0-9_]+)\s*\)/);
         if (isrMatch) {
             const vName = isrMatch[1];
@@ -1082,58 +1371,57 @@ function compileCToAsm(cCode) {
             else if (vName.includes('USART_UDRE')) lbl = '__vector_usart_udre';
             else if (vName.includes('USART_TX')) lbl = '__vector_usart_tx';
             else if (vName.includes('ADC')) lbl = '__vector_adc';
-            asmList.push({ asm: lbl + ':', lineNum });
-            asmList.push({ asm: 'push r16', lineNum });
-            asmList.push({ asm: 'in r16, SREG', lineNum });
-            asmList.push({ asm: 'push r16', lineNum });
+            else if (vName.includes('ANALOG_COMP')) lbl = '__vector_analog_comp';
+            push(lbl + ':', lineNum);
+            isrPrologue(lineNum);
+            insideIsr = true;
             controlStack.push({ type: 'isr' });
             continue;
         }
-
         if (line.includes('main(')) {
             insideMain = true;
-            asmList.push({ asm: '__main:', lineNum });
+            push('__main:', lineNum);
             for (let init of globalInits) asmList.push(init);
             continue;
         }
-        if (line.includes('sei()') || line === 'sei;') { asmList.push({ asm: 'sei', lineNum }); continue; }
-        if (line.includes('cli()') || line === 'cli;') { asmList.push({ asm: 'cli', lineNum }); continue; }
-        if (line.includes('_delay_ms')) { asmList.push({ asm: 'nop', lineNum }); continue; }
-
+        if (line.includes('sei()') || line === 'sei;') { push('sei', lineNum); continue; }
+        if (line.includes('cli()') || line === 'cli;') { push('cli', lineNum); continue; }
+        if (line.includes('_delay_ms')) { push('nop', lineNum); continue; }
         if (line.startsWith('while') && line.includes('PIN')) {
-            const isNegated = line.includes('!(') || line.includes('== 0');
+            const isNegated = line.includes('!(') || line.includes('== 0') || line.includes('!(PIN');
             const pinInfo = extractPinAndBit(line);
             if (pinInfo) {
                 const waitLbl = '__wait_pin_' + (labelCounter++);
-                asmList.push({ asm: waitLbl + ':', lineNum });
-                asmList.push({ asm: 'in r16, ' + pinInfo.port, lineNum });
-                asmList.push({ asm: (isNegated ? 'sbrs' : 'sbrc') + ' r16, ' + pinInfo.bit, lineNum });
-                asmList.push({ asm: 'rjmp ' + waitLbl, lineNum });
+                push(waitLbl + ':', lineNum);
+                push('in r16, ' + pinInfo.port, lineNum);
+                push((isNegated ? 'sbrs' : 'sbrc') + ' r16, ' + pinInfo.bit, lineNum);
+                push('rjmp ' + waitLbl, lineNum);
                 continue;
             }
         }
-
         if (line === '}' || line.startsWith('}')) {
             if (controlStack.length > 0) {
                 const top = controlStack[controlStack.length - 1];
                 if (top.type === 'if') {
                     if (rawLines[i+1]?.text?.startsWith('else')) {
-                        asmList.push({ asm: 'rjmp ' + top.lblEnd, lineNum });
-                        asmList.push({ asm: top.lblFalse + ':', lineNum });
+                        push('rjmp ' + top.lblEnd, lineNum);
+                        push(top.lblFalse + ':', lineNum);
                         top.type = 'else';
                     } else {
                         controlStack.pop();
-                        asmList.push({ asm: top.lblFalse + ':', lineNum });
-                        asmList.push({ asm: top.lblEnd + ':', lineNum });
+                        push(top.lblFalse + ':', lineNum);
+                        push(top.lblEnd + ':', lineNum);
                     }
-                } else if (top.type === 'else') { controlStack.pop(); asmList.push({ asm: top.lblEnd + ':', lineNum }); }
-                else if (top.type === 'while') { controlStack.pop(); asmList.push({ asm: 'rjmp ' + top.startLbl, lineNum }); }
-                else if (top.type === 'isr') {
+                } else if (top.type === 'else') {
                     controlStack.pop();
-                    asmList.push({ asm: 'pop r16', lineNum });
-                    asmList.push({ asm: 'out SREG, r16', lineNum });
-                    asmList.push({ asm: 'pop r16', lineNum });
-                    asmList.push({ asm: 'reti', lineNum });
+                    push(top.lblEnd + ':', lineNum);
+                } else if (top.type === 'while') {
+                    controlStack.pop();
+                    push('rjmp ' + top.startLbl, lineNum);
+                } else if (top.type === 'isr') {
+                    controlStack.pop();
+                    insideIsr = false;
+                    isrEpilogue(lineNum);
                 }
             }
             continue;
@@ -1141,68 +1429,48 @@ function compileCToAsm(cCode) {
         if (line.startsWith('else if')) line = line.substring(5).trim();
         if (line.startsWith('else')) { line = line.substring(4).trim(); if (!line || line === '{') continue; }
         if (line === '{') continue;
-
-        // Обычное объявление
         const declMatch = line.match(/\b(unsigned\s+char|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int|char)\s+([^;]+);/);
         if (declMatch) {
             const typeName = declMatch[1];
             for (let vItem of declMatch[2].split(',')) {
                 const parts = vItem.trim().split('=');
-                const reg = 'r' + (regCounter++);
-                const size = (typeName.includes('32') ? 4 : (typeName.includes('16') || typeName === 'int') ? 2 : 1);
-                varMap[parts[0].trim()] = { reg, type: typeName, size };
-                cpu.symbols.push({ name: parts[0].trim(), type: typeName, size, locType: 'reg', location: reg.toUpperCase() });
+                const vName = parts[0].trim();
                 const initVal = parts[1] ? parts[1].trim() : '0';
-                if (READ_PORTS.includes(initVal.toUpperCase())) {
-                    asmList.push({ asm: (EXTENDED_PORTS.includes(initVal.toUpperCase()) ? 'lds ' : 'in ') + reg + ', ' + initVal.toUpperCase(), lineNum });
-                } else {
-                    const constVal = evaluateCExpression(applyDefines(initVal), defines);
-                    const inst = { asm: 'ldi ' + reg + ', ' + ((constVal !== null ? constVal : 0) & 0xFF), lineNum };
-                    if (!insideMain) globalInits.push(inst); else asmList.push(inst);
+                const reg = allocVarReg();
+                const size = (typeName.includes('32') ? 4 : (typeName.includes('16') || typeName === 'int') ? 2 : 1);
+                varMap[vName] = { reg, type: typeName, size };
+                cpu.symbols.push({ name: vName, type: typeName, size, locType: 'reg', location: reg.toUpperCase() });
+                let inst;
+                if (READ_REGS.includes(initVal)) inst = { asm: (isExtReg(initVal) ? 'lds ' : 'in ') + reg + ', ' + initVal, lineNum };
+                else {
+                    const cv = evaluateCExpression(applyDefines(initVal), defines);
+                    inst = { asm: 'ldi ' + reg + ', ' + ((cv !== null ? cv : 0) & 0xFF), lineNum };
                 }
+                if (!insideMain && !insideIsr) globalInits.push(inst); else asmList.push(inst);
             }
             continue;
         }
-
-        // arr[idx] = value
-        const arrWriteMatch = line.match(/\b([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]\s*=\s*([^;]+);/);
-        if (arrWriteMatch && varMap[arrWriteMatch[1]]?.type === 'sram_array') {
-            const expr = arrWriteMatch[3].trim();
-            if (varMap[expr]) asmList.push({ asm: 'mov r16, ' + varMap[expr].reg, lineNum });
-            else {
-                const cVal = evaluateCExpression(applyDefines(expr), defines);
-                asmList.push({ asm: 'ldi r16, ' + ((cVal !== null ? cVal : 0) & 0xFF), lineNum });
+        const arrReadMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;/);
+        if (arrReadMatch) {
+            const dst = arrReadMatch[1];
+            if (emitArrRead(arrReadMatch[2], arrReadMatch[3], lineNum)) {
+                if (varMap[dst]) push('mov ' + varMap[dst].reg + ', r16', lineNum);
+                else emitStore(dst, lineNum);
+                continue;
             }
-            const idxToken = arrWriteMatch[2];
-            const baseAddr = varMap[arrWriteMatch[1]].addr;
-            if (/^\d+$/.test(idxToken)) asmList.push({ asm: 'sts ' + (baseAddr + parseInt(idxToken, 10)) + ', r16', lineNum });
-            else if (varMap[idxToken]) {
-                asmList.push({ asm: 'ldi xl, low(' + baseAddr + ')', lineNum });
-                asmList.push({ asm: 'ldi xh, high(' + baseAddr + ')', lineNum });
-                asmList.push({ asm: 'add xl, ' + varMap[idxToken].reg, lineNum });
-                asmList.push({ asm: 'clr r1', lineNum });
-                asmList.push({ asm: 'adc xh, r1', lineNum });
-                asmList.push({ asm: 'st X, r16', lineNum });
-            }
-            continue;
         }
-
-        // if (arr[idx] == val) — SRAM и Flash
         const arrCmpMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*(==|!=)\s*([^)]+)\)/);
         if (arrCmpMatch) {
-            const arr = arrCmpMatch[1], idxToken = arrCmpMatch[2], op = arrCmpMatch[3];
             const cmpVal = evaluateCExpression(applyDefines(arrCmpMatch[4].trim()), defines);
             const lblFalse = '__lbl_false_' + (labelCounter++);
             const lblEnd = '__lbl_end_' + (labelCounter++);
-            if (varMap[arr]?.type === 'sram_array') emitSramRead(arr, idxToken, lineNum, asmList);
-            else if (varMap[arr]?.type === 'string_array') emitStringRead(arr, idxToken, lineNum, asmList);
-            asmList.push({ asm: 'cpi r16, ' + ((cmpVal !== null ? cmpVal : 0) & 0xFF), lineNum });
-            asmList.push({ asm: (op === '==' ? 'brne ' : 'breq ') + lblFalse, lineNum });
-            controlStack.push({ type: 'if', lblFalse, lblEnd });
-            continue;
+            if (emitArrRead(arrCmpMatch[1], arrCmpMatch[2], lineNum)) {
+                push('cpi r16, ' + ((cmpVal !== null ? cmpVal : 0) & 0xFF), lineNum);
+                emitCondBranch(arrCmpMatch[3], lblFalse, lineNum);
+                controlStack.push({ type: 'if', lblFalse, lblEnd });
+                continue;
+            }
         }
-
-        // if с &&
         if (line.startsWith('if') && line.includes('&&')) {
             const condContent = line.substring(line.indexOf('(') + 1, line.lastIndexOf(')'));
             const lblFalse = '__lbl_false_' + (labelCounter++);
@@ -1211,154 +1479,139 @@ function compileCToAsm(cCode) {
                 const m = sub.match(/([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^]+)/);
                 if (m && varMap[m[1]]) {
                     const cVal = evaluateCExpression(applyDefines(m[3]), defines);
-                    asmList.push({ asm: 'cpi ' + varMap[m[1]].reg + ', ' + ((cVal !== null ? cVal : 0) & 0xFF), lineNum });
-                    if (m[2] === '==') asmList.push({ asm: 'brne ' + lblFalse, lineNum });
-                    else if (m[2] === '!=') asmList.push({ asm: 'breq ' + lblFalse, lineNum });
-                    else if (m[2] === '>=') asmList.push({ asm: 'brlo ' + lblFalse, lineNum });
-                    else if (m[2] === '<') asmList.push({ asm: 'brsh ' + lblFalse, lineNum });
+                    push('cpi ' + varMap[m[1]].reg + ', ' + ((cVal !== null ? cVal : 0) & 0xFF), lineNum);
+                    emitCondBranch(m[2], lblFalse, lineNum);
                 }
             }
             controlStack.push({ type: 'if', lblFalse, lblEnd });
             continue;
         }
-
-        // |=, &= ~, ^= (все три порта + расширенные)
-        const portOrMatch = line.match(/\b(DDRB|PORTB|DDRC|PORTC|DDRD|PORTD|UCSR0B|UCSR0C|EICRA|EIMSK|PCICR|PCMSK0|PCMSK1|PCMSK2)\s*\|\=\s*([^;]+);/);
+        const portOrMatch = line.match(RW_PORTS_REGEX);
         if (portOrMatch) {
             const portName = portOrMatch[1];
             const mask = evaluateCExpression(applyDefines(portOrMatch[2]), defines) & 0xFF;
-            const isExt = EXTENDED_PORTS.includes(portName);
-            asmList.push({ asm: (isExt ? 'lds' : 'in') + ' r16, ' + portName, lineNum });
-            asmList.push({ asm: 'ori r16, ' + mask, lineNum });
-            asmList.push({ asm: (isExt ? 'sts' : 'out') + ' ' + portName + ', r16', lineNum });
+            push((isExtReg(portName) ? 'lds' : 'in') + ' r16, ' + portName, lineNum);
+            push('ori r16, ' + mask, lineNum);
+            push((isExtReg(portName) ? 'sts' : 'out') + ' ' + portName + ', r16', lineNum);
             continue;
         }
-        const portAndNotMatch = line.match(/\b(DDRB|PORTB|DDRC|PORTC|DDRD|PORTD|UCSR0B|UCSR0C)\s*&\=\s*~([^;]+);/);
+        const portAndNotMatch = line.match(AND_NOT_REGEX);
         if (portAndNotMatch) {
             const portName = portAndNotMatch[1];
-            const mask = evaluateCExpression(applyDefines(portAndNotMatch[2]), defines) & 0xFF;
-            const isExt = EXTENDED_PORTS.includes(portName);
-            asmList.push({ asm: (isExt ? 'lds' : 'in') + ' r16, ' + portName, lineNum });
-            asmList.push({ asm: 'andi r16, ' + ((~mask) & 0xFF), lineNum });
-            asmList.push({ asm: (isExt ? 'sts' : 'out') + ' ' + portName + ', r16', lineNum });
+            const rawExpr = line.substring(line.indexOf('~') + 1, line.lastIndexOf(';')).trim();
+            const mask = evaluateCExpression(applyDefines(rawExpr), defines) & 0xFF;
+            push((isExtReg(portName) ? 'lds' : 'in') + ' r16, ' + portName, lineNum);
+            push('andi r16, ' + ((~mask) & 0xFF), lineNum);
+            push((isExtReg(portName) ? 'sts' : 'out') + ' ' + portName + ', r16', lineNum);
             continue;
         }
-        const portXorMatch = line.match(/\b(DDRB|PORTB|DDRC|PORTC|DDRD|PORTD)\s*\^\=\s*([^;]+);/);
+        const portXorMatch = line.match(XOR_REGEX);
         if (portXorMatch) {
+            const portName = portXorMatch[1];
             const mask = evaluateCExpression(applyDefines(portXorMatch[2]), defines) & 0xFF;
-            asmList.push({ asm: 'in r16, ' + portXorMatch[1], lineNum });
-            asmList.push({ asm: 'ldi r17, ' + mask, lineNum });
-            asmList.push({ asm: 'eor r16, r17', lineNum });
-            asmList.push({ asm: 'out ' + portXorMatch[1] + ', r16', lineNum });
+            push((isExtReg(portName) ? 'lds' : 'in') + ' r16, ' + portName, lineNum);
+            push('ldi r17, ' + mask, lineNum);
+            push('eor r16, r17', lineNum);
+            push((isExtReg(portName) ? 'sts' : 'out') + ' ' + portName + ', r16', lineNum);
             continue;
         }
-
-        // Присваивание
         const assignMatch = line.match(/\b([a-zA-Z0-9_]+)\s*=\s*([^;]+);/);
         if (assignMatch) {
             const dst = assignMatch[1].trim();
             const src = assignMatch[2].trim();
-
-            if (dst === 'UBRR0' || dst === 'UBRR0L') {
+            if (dst === 'UBRR0') {
                 const cVal = evaluateCExpression(applyDefines(src), defines) || 0;
-                asmList.push({ asm: 'ldi r16, ' + (cVal & 0xFF), lineNum });
-                asmList.push({ asm: 'sts UBRR0L, r16', lineNum });
-                asmList.push({ asm: 'ldi r16, ' + ((cVal >> 8) & 0xFF), lineNum });
-                asmList.push({ asm: 'sts UBRR0H, r16', lineNum });
+                push('ldi r16, ' + ((cVal >> 8) & 0xFF), lineNum);
+                push('sts UBRR0H, r16', lineNum);
+                push('ldi r16, ' + (cVal & 0xFF), lineNum);
+                push('sts UBRR0L, r16', lineNum);
                 continue;
             }
-            if (ALL_PORTS.includes(dst)) { emitPortWrite(dst, src, lineNum, asmList); continue; }
-
-            if (varMap[dst]) {
-                // dst = arr[idx]
-                const arrAccess = parseArrayAccess(src);
-                if (arrAccess && varMap[arrAccess.arr]?.type === 'string_array') {
-                    emitStringRead(arrAccess.arr, arrAccess.idx, lineNum, asmList);
-                    asmList.push({ asm: 'mov ' + varMap[dst].reg + ', r16', lineNum });
-                    continue;
+            if (dst === 'UBRR0L' || dst === 'UBRR0H') {
+                const cVal = evaluateCExpression(applyDefines(src), defines) || 0;
+                push('ldi r16, ' + (cVal & 0xFF), lineNum);
+                push('sts ' + dst + ', r16', lineNum);
+                continue;
+            }
+            if (RW_PORTS.includes(dst) || dst === 'UDR0') {
+                const arrAccess = src.match(/^([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]$/);
+                if (arrAccess && emitArrRead(arrAccess[1], arrAccess[2], lineNum)) { emitStore(dst, lineNum); continue; }
+                if (READ_REGS.includes(src)) {
+                    push((isExtReg(src) ? 'lds' : 'in') + ' r16, ' + src, lineNum);
+                    emitStore(dst, lineNum); continue;
                 }
-                if (arrAccess && varMap[arrAccess.arr]?.type === 'sram_array') {
-                    emitSramRead(arrAccess.arr, arrAccess.idx, lineNum, asmList);
-                    asmList.push({ asm: 'mov ' + varMap[dst].reg + ', r16', lineNum });
-                    continue;
-                }
-                // dst = PINx / UDR0 и т.п.
-                if (READ_PORTS.includes(src.toUpperCase())) {
-                    asmList.push({ asm: (EXTENDED_PORTS.includes(src.toUpperCase()) ? 'lds ' : 'in ') + varMap[dst].reg + ', ' + src.toUpperCase(), lineNum });
-                    continue;
-                }
-                // dst = a ^ b / a & b / a | b (бинарные операции между переменными)
-                const binMatch = src.match(/^([a-zA-Z0-9_]+)\s*([\^&\|])\s*([a-zA-Z0-9_]+)$/);
-                if (binMatch && varMap[binMatch[1]] && varMap[binMatch[3]]) {
-                    asmList.push({ asm: 'mov r16, ' + varMap[binMatch[1]].reg, lineNum });
-                    const opMap = { '^': 'eor', '&': 'and', '|': 'or' };
-                    asmList.push({ asm: opMap[binMatch[2]] + ' r16, ' + varMap[binMatch[3]].reg, lineNum });
-                    asmList.push({ asm: 'mov ' + varMap[dst].reg + ', r16', lineNum });
-                    continue;
-                }
-                // dst = var
-                if (varMap[src]) { asmList.push({ asm: 'mov ' + varMap[dst].reg + ', ' + varMap[src].reg, lineNum }); continue; }
-                // dst = константа
+                if (varMap[src]) { push((isExtReg(dst) ? 'sts ' : 'out ') + dst + ', ' + varMap[src].reg, lineNum); continue; }
                 const cVal = evaluateCExpression(applyDefines(src), defines);
-                if (cVal !== null) asmList.push({ asm: 'ldi ' + varMap[dst].reg + ', ' + (cVal & 0xFF), lineNum });
+                if (cVal !== null) { push('ldi r16, ' + (cVal & 0xFF), lineNum); emitStore(dst, lineNum); }
+                continue;
+            }
+            if (varMap[dst]) {
+                const arrAccess = src.match(/^([a-zA-Z0-9_]+)\[([a-zA-Z0-9_]+)\]$/);
+                if (arrAccess && emitArrRead(arrAccess[1], arrAccess[2], lineNum)) {
+                    push('mov ' + varMap[dst].reg + ', r16', lineNum); continue;
+                }
+                if (READ_REGS.includes(src)) {
+                    push((isExtReg(src) ? 'lds ' : 'in ') + varMap[dst].reg + ', ' + src, lineNum); continue;
+                }
+                const bin = src.match(/^([a-zA-Z0-9_]+)\s*([\^&|])\s*([a-zA-Z0-9_]+)$/);
+                if (bin && varMap[bin[1]] && varMap[bin[3]]) {
+                    const opAsm = { '^': 'eor', '&': 'and', '|': 'or' }[bin[2]];
+                    push('mov ' + varMap[dst].reg + ', ' + varMap[bin[1]].reg, lineNum);
+                    push(opAsm + ' ' + varMap[dst].reg + ', ' + varMap[bin[3]].reg, lineNum);
+                    continue;
+                }
+                if (varMap[src]) { push('mov ' + varMap[dst].reg + ', ' + varMap[src].reg, lineNum); continue; }
+                const cVal = evaluateCExpression(applyDefines(src), defines);
+                if (cVal !== null) push('ldi ' + varMap[dst].reg + ', ' + (cVal & 0xFF), lineNum);
                 continue;
             }
         }
-
-        // if (PIN...)
         if (line.startsWith('if') && line.includes('PIN')) {
-            const isNegated = line.includes('!(') || line.includes('== 0');
+            const isNegated = line.includes('!(') || line.includes('== 0') || line.includes('!(PIN');
             const pinInfo = extractPinAndBit(line);
             if (pinInfo) {
                 const lblFalse = '__lbl_false_' + (labelCounter++);
                 const lblEnd = '__lbl_end_' + (labelCounter++);
-                asmList.push({ asm: 'in r16, ' + pinInfo.port, lineNum });
-                asmList.push({ asm: (isNegated ? 'sbrc' : 'sbrs') + ' r16, ' + pinInfo.bit, lineNum });
-                asmList.push({ asm: 'rjmp ' + lblFalse, lineNum });
+                push('in r16, ' + pinInfo.port, lineNum);
+                push((isNegated ? 'sbrc' : 'sbrs') + ' r16, ' + pinInfo.bit, lineNum);
+                push('rjmp ' + lblFalse, lineNum);
                 controlStack.push({ type: 'if', lblFalse, lblEnd });
                 continue;
             }
         }
-
-        // if (var == val)
         const ifMatch = line.match(/if\s*\(\s*([a-zA-Z0-9_]+)\s*(==|!=|>=|>|<=|<)\s*([^)]+)\)/);
-        if (ifMatch && varMap[ifMatch[1]]) {
+        if (ifMatch) {
             const cmpVal = evaluateCExpression(applyDefines(ifMatch[3]), defines);
-            if (cmpVal !== null) {
+            if (cmpVal !== null && varMap[ifMatch[1]]) {
                 const lblFalse = '__lbl_false_' + (labelCounter++);
                 const lblEnd = '__lbl_end_' + (labelCounter++);
-                asmList.push({ asm: 'cpi ' + varMap[ifMatch[1]].reg + ', ' + (cmpVal & 0xFF), lineNum });
-                const brMap = { '==': 'brne', '!=': 'breq', '>=': 'brlo', '<': 'brsh' };
-                if (brMap[ifMatch[2]]) asmList.push({ asm: brMap[ifMatch[2]] + ' ' + lblFalse, lineNum });
+                push('cpi ' + varMap[ifMatch[1]].reg + ', ' + (scaleThreshold(cmpVal) & 0xFF), lineNum);
+                emitCondBranch(ifMatch[2], lblFalse, lineNum);
                 controlStack.push({ type: 'if', lblFalse, lblEnd });
                 continue;
             }
         }
-
         if (line.startsWith('while') && line.includes('1')) {
             const startLbl = '__while_start_' + (labelCounter++);
-            asmList.push({ asm: startLbl + ':', lineNum });
+            push(startLbl + ':', lineNum);
             controlStack.push({ type: 'while', startLbl });
             continue;
         }
         const incMatch = line.match(/\b([a-zA-Z0-9_]+)\+\+;/);
-        if (incMatch && varMap[incMatch[1]]) { asmList.push({ asm: 'inc ' + varMap[incMatch[1]].reg, lineNum }); continue; }
+        if (incMatch && varMap[incMatch[1]]) { push('inc ' + varMap[incMatch[1]].reg, lineNum); continue; }
+        const decMatch = line.match(/\b([a-zA-Z0-9_]+)--;/);
+        if (decMatch && varMap[decMatch[1]]) { push('dec ' + varMap[decMatch[1]].reg, lineNum); continue; }
     }
-
     while (controlStack.length > 0) {
         const top = controlStack.pop();
-        if (top.type === 'while') asmList.push({ asm: 'rjmp ' + top.startLbl, lineNum: origLines.length });
-        else if (top.type === 'if') { asmList.push({ asm: top.lblFalse + ':', lineNum: origLines.length }); asmList.push({ asm: top.lblEnd + ':', lineNum: origLines.length }); }
-        else if (top.type === 'else') asmList.push({ asm: top.lblEnd + ':', lineNum: origLines.length });
-        else if (top.type === 'isr') {
-            asmList.push({ asm: 'pop r16', lineNum: origLines.length });
-            asmList.push({ asm: 'out SREG, r16', lineNum: origLines.length });
-            asmList.push({ asm: 'pop r16', lineNum: origLines.length });
-            asmList.push({ asm: 'reti', lineNum: origLines.length });
-        }
+        if (top.type === 'while') push('rjmp ' + top.startLbl, origLines.length);
+        else if (top.type === 'if') { push(top.lblFalse + ':', origLines.length); push(top.lblEnd + ':', origLines.length); }
+        else if (top.type === 'else') push(top.lblEnd + ':', origLines.length);
+        else if (top.type === 'isr') isrEpilogue(origLines.length);
     }
     return asmList;
 }
+
 /* ================= 11. ПАРСЕР И ПРЕ-ДЕКОДИНГ ================= */
 
 function evaluateAsmExpression(expr) {
@@ -1377,6 +1630,8 @@ function evaluateAsmExpression(expr) {
 
     if (expr.toLowerCase().includes('ramend')) return 0x08FF;
 
+    expr = expr.replace(/'\\n'/g, '10').replace(/'\\r'/g, '13').replace(/'\\0'/g, '0');
+    expr = expr.replace(/'(.)'/g, (m, c) => c.charCodeAt(0));
     expr = expr.replace(/high\s*\(([^)]+)\)/gi, (m, inner) => '((' + inner + ') >> 8) & 0xFF');
     expr = expr.replace(/low\s*\(([^)]+)\)/gi, (m, inner) => '(' + inner + ') & 0xFF');
     expr = expr.replace(/\$([0-9a-fA-F]+)/g, '0x$1');
@@ -1401,6 +1656,9 @@ function parseVal(arg) {
 function parseReg(arg) {
     if (!arg) return 0;
     arg = arg.trim().toLowerCase();
+    if (cpu.defAliases && cpu.defAliases[arg] !== undefined) {
+        return cpu.defAliases[arg];
+    }
     const aliases = { 
         'xl': 26, 'xh': 27, 'x': 26,
         'yl': 28, 'yh': 29, 'y': 28,
@@ -1442,6 +1700,7 @@ function parseProgram(text) {
     cpu.program = [];
     cpu.labels = {};
     cpu.equConstants = {};
+    cpu.defAliases = {};
     cpu.flashBytes.fill(0);
     cpu.error = null;
     inspectorNeedsRebuild = true;
@@ -1460,12 +1719,18 @@ function parseProgram(text) {
             let line = item.asm.trim();
             if (!line || line.startsWith('.cseg')) continue;
 
-            if (line.includes(':')) {
+            if (line.includes(':') && !line.toLowerCase().includes('.db')) {
                 const parts = line.split(':');
                 const lblName = parts[0].trim().toLowerCase();
                 cpu.labels[lblName] = instIndex;
                 line = parts.slice(1).join(':').trim();
                 if (!line) continue;
+            }
+
+            const lblDbMatch = line.match(/^([a-zA-Z0-9_]+):\s*(\.db\b.*)/i);
+            if (lblDbMatch) {
+                cpu.labels[lblDbMatch[1].toLowerCase()] = instIndex;
+                line = lblDbMatch[2];
             }
 
             if (line.toLowerCase().startsWith('.db')) {
@@ -1501,8 +1766,14 @@ function parseProgram(text) {
             const op = tokens[0].toLowerCase();
             const argsStr = line.substring(tokens[0].length).trim();
             const args = argsStr ? argsStr.split(',').map(a => a.trim()) : [];
-            cpu.program.push({ op, args, lineNum: item.lineNum, raw: line, targetPc: -1 });
-            instIndex++;
+            const instObj = { op, args, lineNum: item.lineNum, raw: line, targetPc: -1 };
+            cpu.program[instIndex] = instObj;
+            if (isTwoWordInstruction(instObj)) {
+                cpu.program[instIndex + 1] = { op: '_word2', args: [], lineNum: item.lineNum, raw: '', targetPc: -1 };
+                instIndex += 2;
+            } else {
+                instIndex += 1;
+            }
         }
     } else {
         cpu.symbols = [];
@@ -1518,6 +1789,7 @@ function parseProgram(text) {
 
             const defMatch = line.match(/\.def\s+([a-zA-Z0-9_]+)\s*=\s*r([0-9]+)/i);
             if (defMatch) {
+                cpu.defAliases[defMatch[1].toLowerCase()] = parseInt(defMatch[2], 10);
                 cpu.symbols.push({ name: defMatch[1], type: 'reg', size: 1, locType: 'reg', location: 'R' + defMatch[2] });
             }
         }
@@ -1537,6 +1809,12 @@ function parseProgram(text) {
                     wordIndex++;
                 }
                 continue;
+            }
+
+            const lblDbMatch = line.match(/^([a-zA-Z0-9_]+):\s*(\.db\b.*)/i);
+            if (lblDbMatch) {
+                cpu.labels[lblDbMatch[1].toLowerCase()] = wordIndex;
+                line = lblDbMatch[2];
             }
 
             if (line.toLowerCase().startsWith('.db')) {
@@ -1562,21 +1840,34 @@ function parseProgram(text) {
 
             if (line.startsWith('.')) continue;
 
-            const parts = line.split(':').map(p => p.trim()).filter(Boolean);
-            for (let part of parts) {
+            const segments = line.split(':');
+            for (let sIdx = 0; sIdx < segments.length; sIdx++) {
+                const part = segments[sIdx].trim();
+                if (!part) continue;
+                const hadColonAfter = (sIdx < segments.length - 1);
                 const tokens = part.split(/\s+/);
                 const first = tokens[0].toLowerCase();
 
                 if (!KNOWN_OPS.has(first)) {
-                    cpu.labels[first] = wordIndex;
-                    continue;
+                    if (hadColonAfter && tokens.length === 1) {
+                        cpu.labels[first] = wordIndex;
+                        continue;
+                    }
+                    cpu.error = 'Строка ' + (i + 1) + ': неизвестная команда "' + tokens[0] + '"';
+                    return;
                 }
 
                 const op = first;
                 const argsStr = part.substring(tokens[0].length).trim();
                 const args = argsStr ? argsStr.split(',').map(a => a.trim()) : [];
-                cpu.program[wordIndex] = { op, args, lineNum: i + 1, raw: part, targetPc: -1 };
-                wordIndex++;
+                const instObj = { op, args, lineNum: i + 1, raw: part, targetPc: -1 };
+                cpu.program[wordIndex] = instObj;
+                if (isTwoWordInstruction(instObj)) {
+                    cpu.program[wordIndex + 1] = { op: '_word2', args: [], lineNum: i + 1, raw: '', targetPc: -1 };
+                    wordIndex += 2;
+                } else {
+                    wordIndex += 1;
+                }
             }
         }
     }
@@ -1587,15 +1878,15 @@ function parseProgram(text) {
             cpu.program[j] = { op: 'nop', args: [], lineNum: 1, raw: 'nop', targetPc: -1 };
             continue;
         }
+        if (inst.op === '_word2') continue;
 
         const a = inst.args || [];
         inst.rd = a[0] ? parseReg(a[0]) : 0;
         inst.rr = a[1] ? parseReg(a[1]) : 0;
 
-        if (['ldi', 'subi', 'sbci', 'andi', 'ori', 'cpi'].includes(inst.op)) {
+        if (['ldi', 'subi', 'sbci', 'andi', 'ori', 'cpi', 'sbr', 'cbr', 'adiw', 'sbiw'].includes(inst.op)) {
             inst.imm = a[1] ? (parseVal(a[1]) & 0xFF) : 0;
         }
-
         if (inst.op === 'in') {
             inst.ioAddr = a[1] ? resolveIoRamAddr(a[1]) : 0;
         } else if (['out', 'sbi', 'cbi', 'sbis', 'sbic'].includes(inst.op)) {
@@ -1613,7 +1904,7 @@ function parseProgram(text) {
             inst.dataAddr = resolveDataRamAddr(inst.op === 'lds' ? a[1] : a[0]);
         }
 
-        if (['jmp', 'rjmp', 'call', 'breq', 'brne', 'brcs', 'brcc', 'brlo', 'brsh', 'brts', 'brtc'].includes(inst.op)) {
+        if (['jmp', 'rjmp', 'call', 'rcall', 'breq', 'brne', 'brcs', 'brcc', 'brlo', 'brsh', 'brts', 'brtc', 'brmi', 'brpl', 'brge', 'brlt', 'brhs', 'brhc', 'brvs', 'brvc', 'brls', 'brhi'].includes(inst.op)) {
             const targetLbl = a[0] ? a[0].toLowerCase() : '';
             if (cpu.labels[targetLbl] !== undefined) {
                 inst.targetPc = cpu.labels[targetLbl];
@@ -1624,68 +1915,151 @@ function parseProgram(text) {
 
 /* ================= 12. ГЕНЕРАТОР INTEL HEX ================= */
 
-function encodeAvrInstruction(inst) {
+function encodeAvrInstruction(inst, wordAddr = 0) {
     if (!inst) return [0x00, 0x00];
     const op = inst.op.toLowerCase();
-    const a = inst.args;
+    const a = inst.args || [];
+    const le16 = (code) => [code & 0xFF, (code >> 8) & 0xFF];
+
+    const sregFlagBits = {
+        sec: 0, clc: 0, sez: 1, clz: 1, sen: 2, cln: 2, sev: 3, clv: 3,
+        ses: 4, cls: 4, seh: 5, clh: 5, set: 6, clt: 6, sei: 7, cli: 7
+    };
+    if (op in sregFlagBits) {
+        const isClear = op.startsWith('cl');
+        return le16((isClear ? 0x9488 : 0x9408) | (sregFlagBits[op] << 4));
+    }
+
+    const brSet = { brcs: 0, brlo: 0, breq: 1, brmi: 2, brvs: 3, brlt: 4, brhs: 5, brts: 6 };
+    const brClr = { brcc: 0, brsh: 0, brne: 1, brpl: 2, brvc: 3, brge: 4, brhc: 5, brtc: 6 };
+    if (op in brSet || op in brClr) {
+        const target = inst.targetPc !== -1 ? inst.targetPc : 0;
+        const offset = (target - (wordAddr + 1)) & 0x7F;
+        const s = (op in brSet) ? brSet[op] : brClr[op];
+        const base = (op in brSet) ? 0xF000 : 0xF400;
+        return le16(base | (offset << 3) | s);
+    }
 
     try {
         switch (op) {
-            case 'nop': return [0x00, 0x00];
-            case 'sec': return [0x78, 0x94];
-            case 'clc': return [0x88, 0x94];
-            case 'sei': return [0x78, 0x94];
-            case 'cli': return [0xF8, 0x94];
-            case 'ret': return [0x08, 0x95];
-            case 'reti': return [0x18, 0x95];
+            case 'nop':   return [0x00, 0x00];
+            case 'ret':   return [0x08, 0x95];
+            case 'reti':  return [0x18, 0x95];
+            case 'sleep': return [0x88, 0x95];
             case 'break': return [0x98, 0x95];
+            case 'wdr':   return [0xA8, 0x95];
+
             case 'lpm': {
-                if (a.length >= 2 && a[1].includes('+')) {
-                    const code = 0x9005 | (inst.rd << 4);
-                    return [code & 0xFF, (code >> 8) & 0xFF];
-                }
+                if (a.length >= 2 && a[1].includes('+')) return le16(0x9005 | (inst.rd << 4));
+                if (a.length >= 1 && a[0]) return le16(0x9004 | (inst.rd << 4));
                 return [0xC8, 0x95];
             }
-            case 'ldi': {
-                const rd = inst.rd - 16;
-                const k = inst.imm;
-                const code = 0xE000 | ((k & 0xF0) << 4) | (rd << 4) | (k & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
+
+            case 'ldi':  return le16(0xE000 | ((inst.imm & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (inst.imm & 0x0F));
+            case 'ser':  return le16(0xEF0F | (((inst.rd - 16) & 0x0F) << 4));
+            case 'subi': return le16(0x5000 | ((inst.imm & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (inst.imm & 0x0F));
+            case 'sbci': return le16(0x4000 | ((inst.imm & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (inst.imm & 0x0F));
+            case 'cpi':  return le16(0x3000 | ((inst.imm & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (inst.imm & 0x0F));
+            case 'ori':
+            case 'sbr':  return le16(0x6000 | ((inst.imm & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (inst.imm & 0x0F));
+            case 'andi': return le16(0x7000 | ((inst.imm & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (inst.imm & 0x0F));
+            case 'cbr': {
+                const k = (~inst.imm) & 0xFF;
+                return le16(0x7000 | ((k & 0xF0) << 4) | (((inst.rd - 16) & 0x0F) << 4) | (k & 0x0F));
             }
-            case 'mov': {
-                const code = 0x2C00 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
+
+            case 'cpc':  return le16(0x0400 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'sbc':  return le16(0x0800 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'add':  return le16(0x0C00 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'cpse': return le16(0x1000 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'cp':   return le16(0x1400 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'sub':  return le16(0x1800 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'adc':  return le16(0x1C00 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'and':  return le16(0x2000 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'eor':  return le16(0x2400 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'or':   return le16(0x2800 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'mov':  return le16(0x2C00 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+            case 'mul':  return le16(0x9C00 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F));
+
+            case 'clr':  return le16(0x2400 | ((inst.rd & 0x10) << 5) | (inst.rd << 4) | (inst.rd & 0x0F));
+            case 'tst':  return le16(0x2000 | ((inst.rd & 0x10) << 5) | (inst.rd << 4) | (inst.rd & 0x0F));
+            case 'lsl':  return le16(0x0C00 | ((inst.rd & 0x10) << 5) | (inst.rd << 4) | (inst.rd & 0x0F));
+            case 'rol':  return le16(0x1C00 | ((inst.rd & 0x10) << 5) | (inst.rd << 4) | (inst.rd & 0x0F));
+
+            case 'movw':  return le16(0x0100 | (((inst.rd >> 1) & 0x0F) << 4) | ((inst.rr >> 1) & 0x0F));
+            case 'muls':  return le16(0x0200 | (((inst.rd - 16) & 0x0F) << 4) | ((inst.rr - 16) & 0x0F));
+            case 'mulsu': return le16(0x0300 | (((inst.rd - 16) & 0x07) << 4) | ((inst.rr - 16) & 0x07));
+
+            case 'adiw': {
+                const d = ((inst.rd - 24) >> 1) & 0x03;
+                const k = inst.imm & 0x3F;
+                return le16(0x9600 | ((k & 0x30) << 2) | (d << 4) | (k & 0x0F));
             }
-            case 'add': {
-                const code = 0x0C00 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
+            case 'sbiw': {
+                const d = ((inst.rd - 24) >> 1) & 0x03;
+                const k = inst.imm & 0x3F;
+                return le16(0x9700 | ((k & 0x30) << 2) | (d << 4) | (k & 0x0F));
             }
-            case 'sub': {
-                const code = 0x1800 | ((inst.rr & 0x10) << 5) | (inst.rd << 4) | (inst.rr & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
-            }
-            case 'subi': {
-                const rd = inst.rd - 16;
-                const k = inst.imm;
-                const code = 0x5000 | ((k & 0xF0) << 4) | (rd << 4) | (k & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
-            }
-            case 'cpi': {
-                const rd = inst.rd - 16;
-                const k = inst.imm;
-                const code = 0x3000 | ((k & 0xF0) << 4) | (rd << 4) | (k & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
-            }
+
+            case 'com':  return le16(0x9400 | (inst.rd << 4));
+            case 'neg':  return le16(0x9401 | (inst.rd << 4));
+            case 'swap': return le16(0x9402 | (inst.rd << 4));
+            case 'inc':  return le16(0x9403 | (inst.rd << 4));
+            case 'asr':  return le16(0x9405 | (inst.rd << 4));
+            case 'lsr':  return le16(0x9406 | (inst.rd << 4));
+            case 'ror':  return le16(0x9407 | (inst.rd << 4));
+            case 'dec':  return le16(0x940A | (inst.rd << 4));
+            case 'push': return le16(0x920F | (inst.rd << 4));
+            case 'pop':  return le16(0x900F | (inst.rd << 4));
+
             case 'in': {
                 const port = (inst.ioAddr - IO_OFFSET) & 0x3F;
-                const code = 0xB000 | ((port & 0x30) << 5) | (inst.rd << 4) | (port & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
+                return le16(0xB000 | ((port & 0x30) << 5) | (inst.rd << 4) | (port & 0x0F));
             }
             case 'out': {
-                const port = (resolveIoRamAddr(a[0]) - IO_OFFSET) & 0x3F;
-                const code = 0xB800 | ((port & 0x30) << 5) | (inst.rr << 4) | (port & 0x0F);
-                return [code & 0xFF, (code >> 8) & 0xFF];
+                const port = (inst.ioAddr - IO_OFFSET) & 0x3F;
+                return le16(0xB800 | ((port & 0x30) << 5) | (inst.rr << 4) | (port & 0x0F));
             }
+
+            case 'cbi':  return le16(0x9800 | (((inst.ioAddr - IO_OFFSET) & 0x1F) << 3) | (inst.bit & 0x07));
+            case 'sbic': return le16(0x9900 | (((inst.ioAddr - IO_OFFSET) & 0x1F) << 3) | (inst.bit & 0x07));
+            case 'sbi':  return le16(0x9A00 | (((inst.ioAddr - IO_OFFSET) & 0x1F) << 3) | (inst.bit & 0x07));
+            case 'sbis': return le16(0x9B00 | (((inst.ioAddr - IO_OFFSET) & 0x1F) << 3) | (inst.bit & 0x07));
+
+            case 'bld':  return le16(0xF800 | (inst.rd << 4) | (inst.bit & 0x07));
+            case 'bst':  return le16(0xFA00 | (inst.rd << 4) | (inst.bit & 0x07));
+            case 'sbrc': return le16(0xFC00 | (inst.rd << 4) | (inst.bit & 0x07));
+            case 'sbrs': return le16(0xFE00 | (inst.rd << 4) | (inst.bit & 0x07));
+
+            case 'ld': {
+                const ptr = (a[1] || '').toLowerCase();
+                let base = 0x8000;
+                if (ptr === 'x') base = 0x900C;
+                else if (ptr === 'x+') base = 0x900D;
+                else if (ptr === '-x') base = 0x900E;
+                else if (ptr === 'y') base = 0x8008;
+                else if (ptr === 'y+') base = 0x9009;
+                else if (ptr === '-y') base = 0x900A;
+                else if (ptr === 'z') base = 0x8000;
+                else if (ptr === 'z+') base = 0x9001;
+                else if (ptr === '-z') base = 0x9002;
+                return le16(base | (inst.rd << 4));
+            }
+            case 'st': {
+                const ptr = (a[0] || '').toLowerCase();
+                let base = 0x8200;
+                if (ptr === 'x') base = 0x920C;
+                else if (ptr === 'x+') base = 0x920D;
+                else if (ptr === '-x') base = 0x920E;
+                else if (ptr === 'y') base = 0x8208;
+                else if (ptr === 'y+') base = 0x9209;
+                else if (ptr === '-y') base = 0x920A;
+                else if (ptr === 'z') base = 0x8200;
+                else if (ptr === 'z+') base = 0x9201;
+                else if (ptr === '-z') base = 0x9202;
+                return le16(base | (inst.rr << 4));
+            }
+
             case 'sts': {
                 const code1 = 0x9200 | (inst.rr << 4);
                 return [code1 & 0xFF, (code1 >> 8) & 0xFF, inst.dataAddr & 0xFF, (inst.dataAddr >> 8) & 0xFF];
@@ -1698,27 +2072,19 @@ function encodeAvrInstruction(inst) {
                 const target = inst.targetPc !== -1 ? inst.targetPc : 0;
                 return [0x0C, 0x94, target & 0xFF, (target >> 8) & 0xFF];
             }
+            case 'call': {
+                const target = inst.targetPc !== -1 ? inst.targetPc : 0;
+                return [0x0E, 0x94, target & 0xFF, (target >> 8) & 0xFF];
+            }
             case 'rjmp': {
                 const target = inst.targetPc !== -1 ? inst.targetPc : 0;
-                const offset = (target - (cpu.pc + 1)) & 0x0FFF;
-                const code = 0xC000 | offset;
-                return [code & 0xFF, (code >> 8) & 0xFF];
+                const offset = (target - (wordAddr + 1)) & 0x0FFF;
+                return le16(0xC000 | offset);
             }
-            case 'bst': {
-                const code = 0xFA00 | (inst.rd << 4) | inst.bit;
-                return [code & 0xFF, (code >> 8) & 0xFF];
-            }
-            case 'brtc': {
+            case 'rcall': {
                 const target = inst.targetPc !== -1 ? inst.targetPc : 0;
-                const offset = (target - (cpu.pc + 1)) & 0x7F;
-                const code = 0xF400 | (offset << 3) | 0x04;
-                return [code & 0xFF, (code >> 8) & 0xFF];
-            }
-            case 'breq': {
-                const target = inst.targetPc !== -1 ? inst.targetPc : 0;
-                const offset = (target - (cpu.pc + 1)) & 0x7F;
-                const code = 0xF001 | (offset << 3);
-                return [code & 0xFF, (code >> 8) & 0xFF];
+                const offset = (target - (wordAddr + 1)) & 0x0FFF;
+                return le16(0xD000 | offset);
             }
         }
     } catch(e) {}
@@ -1737,24 +2103,21 @@ function exportIntelHex() {
 
     for (let i = 0; i < cpu.program.length; i++) {
         const inst = cpu.program[i];
-        if (inst && inst.raw !== '.db') {
-            const bytes = encodeAvrInstruction(inst);
+        if (inst && inst.raw !== '.db' && inst.op !== '_word2') {
+            const bytes = encodeAvrInstruction(inst, i);
             for (let b = 0; b < bytes.length; b++) hexBuffer[i * 2 + b] = bytes[b];
         }
     }
 
-    let maxAddr = Math.max(cpu.program.length * 2, 32);
-    while (maxAddr > 0 && hexBuffer[maxAddr - 1] === 0) maxAddr--;
-    if (maxAddr % 16 !== 0) maxAddr = (Math.floor(maxAddr / 16) + 1) * 16;
-
+    const maxAddr = cpu.program.length * 2;
     let hexText = '';
     for (let addr = 0; addr < maxAddr; addr += 16) {
-        const len = 16;
+        const len = Math.min(16, maxAddr - addr);
         let sum = len + ((addr >> 8) & 0xFF) + (addr & 0xFF) + 0x00;
         let line = ':' + len.toString(16).padStart(2, '0').toUpperCase();
         line += addr.toString(16).padStart(4, '0').toUpperCase() + '00';
 
-        for (let b = 0; b < 16; b++) {
+        for (let b = 0; b < len; b++) {
             const val = hexBuffer[addr + b] || 0;
             line += val.toString(16).padStart(2, '0').toUpperCase();
             sum += val;
@@ -1785,6 +2148,29 @@ function writeRAM(addr, val) {
 
     if (addr === IO.EIFR || addr === IO.PCIFR) {
         cpu.ram[addr] &= ~val;
+        return;
+    }
+
+    if (addr === IO.SREG) {
+        cpu.ram[IO.SREG] = val;
+        cpu.sreg.C = (val >> 0) & 1;
+        cpu.sreg.Z = (val >> 1) & 1;
+        cpu.sreg.N = (val >> 2) & 1;
+        cpu.sreg.V = (val >> 3) & 1;
+        cpu.sreg.S = (val >> 4) & 1;
+        cpu.sreg.H = (val >> 5) & 1;
+        cpu.sreg.T = (val >> 6) & 1;
+        cpu.sreg.I = (val >> 7) & 1;
+        return;
+    }
+
+    if (addr === IO.ADCSRA) {
+        if ((val & (1 << 7)) && (val & (1 << 6))) {
+            syncAnalogHardware();
+            val &= ~(1 << 6);
+            val |= (1 << 4);
+        }
+        cpu.ram[IO.ADCSRA] = val;
         return;
     }
 
@@ -1823,6 +2209,11 @@ function writeRAM(addr, val) {
 
 function readRAM(addr) {
     if (addr >= 0 && addr < 32) return cpu.r[addr];
+
+    if (addr === IO.SREG) {
+        return (cpu.sreg.I << 7) | (cpu.sreg.T << 6) | (cpu.sreg.H << 5) | (cpu.sreg.S << 4) |
+               (cpu.sreg.V << 3) | (cpu.sreg.N << 2) | (cpu.sreg.Z << 1) | cpu.sreg.C;
+    }
 
     if (addr === IO.UDR0) {
         if (cpu.rxBuffer.length > 0) {
@@ -1887,10 +2278,10 @@ function setFlagsSub(a, b, res, isSbc = false) {
 
     cpu.sreg.H = ((!Rd3 & Rr3) | (Rr3 & R3) | (R3 & !Rd3)) ? 1 : 0;
     cpu.sreg.C = ((!Rd7 & Rr7) | (Rr7 & R7) | (R7 & !Rd7)) ? 1 : 0;
-    
+
     if (isSbc) cpu.sreg.Z = (((res & 0xFF) === 0) && cpu.sreg.Z) ? 1 : 0;
     else cpu.sreg.Z = ((res & 0xFF) === 0) ? 1 : 0;
-    
+
     cpu.sreg.N = (res & 0x80) ? 1 : 0;
     cpu.sreg.V = ((Rd7 & !Rr7 & !R7) | (!Rd7 & Rr7 & R7)) ? 1 : 0;
     cpu.sreg.S = cpu.sreg.N ^ cpu.sreg.V;
@@ -2042,7 +2433,79 @@ function dispatchInterrupt(vectorWordAddr, vectorLabel) {
     }
 }
 
-/* ================= 16. БЫСТРЫЙ ШАГ CPU ================= */
+/* ================= 16. ШАГ ВПЕРЁД И ШАГ НАЗАД CPU ================= */
+
+function saveCpuSnapshot() {
+    cpuHistory.push({
+        r: new Uint8Array(cpu.r),
+        prevR: new Uint8Array(cpu.prevR),
+        ram: new Uint8Array(cpu.ram),
+        pc: cpu.pc,
+        sp: cpu.sp,
+        sreg: { ...cpu.sreg },
+        cycles: cpu.cycles,
+        uartLog: cpu.uartLog,
+        uartTxBusyCycles: cpu.uartTxBusyCycles,
+        rxBuffer: [...cpu.rxBuffer],
+        prevPinB: cpu.prevPinB,
+        prevPinC: cpu.prevPinC,
+        prevPinD: cpu.prevPinD,
+        potVal: cpu.potVal,
+        btnStates: vButtons.map(b => b.pressed),
+        analyzerLen: analyzer.samples.length,
+        lcd: { line1: lcdState.line1, line2: lcdState.line2 }
+    });
+    if (cpuHistory.length > MAX_CPU_HISTORY) {
+        cpuHistory.shift();
+    }
+}
+
+function cpuStepBack() {
+    if (cpuHistory.length === 0) return;
+    haltExecution();
+
+    const snap = cpuHistory.pop();
+    cpu.r.set(snap.r);
+    cpu.prevR.set(snap.prevR);
+    cpu.ram.set(snap.ram);
+    cpu.pc = snap.pc;
+    cpu.sp = snap.sp;
+    cpu.sreg = { ...snap.sreg };
+    cpu.cycles = snap.cycles;
+    cpu.uartLog = snap.uartLog;
+    cpu.uartTxBusyCycles = snap.uartTxBusyCycles;
+    cpu.rxBuffer = [...snap.rxBuffer];
+    cpu.prevPinB = snap.prevPinB;
+    cpu.prevPinC = snap.prevPinC;
+    cpu.prevPinD = snap.prevPinD;
+    cpu.potVal = snap.potVal;
+    lcdState.line1 = snap.lcd.line1;
+    lcdState.line2 = snap.lcd.line2;
+
+    vButtons.forEach((btn, idx) => {
+        if (idx < snap.btnStates.length) {
+            btn.pressed = snap.btnStates[idx];
+            document.getElementById('vbtn_' + btn.id)?.classList.toggle('latched', btn.pressed);
+        }
+    });
+
+    const potRange = document.getElementById('potRange');
+    if (potRange) potRange.value = cpu.potVal;
+    const potBadge = document.getElementById('potVoltageBadge');
+    if (potBadge) potBadge.textContent = (cpu.potVal / 1023 * 5.0).toFixed(2) + ' V (ADC: ' + cpu.potVal + ')';
+
+    const term = document.getElementById('uartTerminal');
+    if (term) term.textContent = cpu.uartLog || 'UART готов к работе...';
+
+    if (analyzer.samples.length > snap.analyzerLen) {
+        analyzer.samples.length = snap.analyzerLen;
+    }
+    lastPinSampleHash = -1;
+
+    syncHardwareState();
+    scheduleAnalyzerDraw();
+    updateUI();
+}
 
 function cpuStep(silent = false) {
     if (cpu.pc < 0) cpu.pc = 0;
@@ -2056,9 +2519,13 @@ function cpuStep(silent = false) {
     const inst = cpu.program[cpu.pc];
     if (!inst) { haltExecution(); if (!silent) updateUI(); return; }
 
-    cpu.prevR.set(cpu.r);
     const op = inst.op;
-    let nextPC = cpu.pc + 1;
+    if (op === 'break') { haltExecution(); if (!silent) updateUI(); return; }
+
+    saveCpuSnapshot();
+
+    cpu.prevR.set(cpu.r);
+    let nextPC = cpu.pc + (isTwoWordInstruction(inst) ? 2 : 1);
 
     if (cpu.uartTxBusyCycles > 0) {
         cpu.uartTxBusyCycles--;
@@ -2067,8 +2534,6 @@ function cpuStep(silent = false) {
             cpu.ram[IO.UCSR0A] |= (1 << 6);
         }
     }
-
-    if (op === 'break') { haltExecution(); if (!silent) updateUI(); return; }
 
     switch (op) {
         case 'ldi': { cpu.r[inst.rd] = inst.imm; break; }
@@ -2109,6 +2574,23 @@ function cpuStep(silent = false) {
             const res = (cpu.r[inst.rd] * cpu.r[inst.rr]) & 0xFFFF;
             cpu.r[0] = res & 0xFF; cpu.r[1] = (res >> 8) & 0xFF;
             cpu.sreg.C = ((res >> 15) & 1); cpu.sreg.Z = (res === 0) ? 1 : 0;
+            break;
+        }
+        case 'muls': {
+            const a = (cpu.r[inst.rd] << 24) >> 24;
+            const b = (cpu.r[inst.rr] << 24) >> 24;
+            const res = a * b;
+            cpu.r[0] = res & 0xFF; cpu.r[1] = (res >> 8) & 0xFF;
+            cpu.sreg.C = ((res >> 15) & 1) ? 1 : 0;
+            cpu.sreg.Z = ((res & 0xFFFF) === 0) ? 1 : 0;
+            break;
+        }
+        case 'mulsu': {
+            const a = (cpu.r[inst.rd] << 24) >> 24;
+            const res = a * cpu.r[inst.rr];
+            cpu.r[0] = res & 0xFF; cpu.r[1] = (res >> 8) & 0xFF;
+            cpu.sreg.C = ((res >> 15) & 1) ? 1 : 0;
+            cpu.sreg.Z = ((res & 0xFFFF) === 0) ? 1 : 0;
             break;
         }
 
@@ -2210,6 +2692,8 @@ function cpuStep(silent = false) {
         case 'andi': { cpu.r[inst.rd] &= inst.imm; setFlagsLogic(cpu.r[inst.rd]); break; }
         case 'or': { cpu.r[inst.rd] |= cpu.r[inst.rr]; setFlagsLogic(cpu.r[inst.rd]); break; }
         case 'ori': { cpu.r[inst.rd] |= inst.imm; setFlagsLogic(cpu.r[inst.rd]); break; }
+        case 'sbr': { cpu.r[inst.rd] |= inst.imm; setFlagsLogic(cpu.r[inst.rd]); break; }
+        case 'cbr': { cpu.r[inst.rd] &= (~inst.imm) & 0xFF; setFlagsLogic(cpu.r[inst.rd]); break; }
         case 'eor': { cpu.r[inst.rd] ^= cpu.r[inst.rr]; setFlagsLogic(cpu.r[inst.rd]); break; }
         case 'tst': { setFlagsLogic(cpu.r[inst.rd]); break; }
 
@@ -2323,7 +2807,8 @@ function cpuStep(silent = false) {
             }
             break;
         }
-        case 'call': {
+        case 'call':
+        case 'rcall': {
             const target = (inst.targetPc !== -1) ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum);
             if (target !== null) { pushStack(nextPC & 0xFF); pushStack((nextPC >> 8) & 0xFF); nextPC = target; }
             break;
@@ -2341,6 +2826,14 @@ function cpuStep(silent = false) {
         case 'brpl': { if (cpu.sreg.N === 0) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
         case 'brts': { if (cpu.sreg.T === 1) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
         case 'brtc': { if (cpu.sreg.T === 0) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brge': { if ((cpu.sreg.N ^ cpu.sreg.V) === 0) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brlt': { if ((cpu.sreg.N ^ cpu.sreg.V) === 1) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brvs': { if (cpu.sreg.V === 1) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brvc': { if (cpu.sreg.V === 0) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brhs': { if (cpu.sreg.H === 1) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brhc': { if (cpu.sreg.H === 0) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brls': { if ((cpu.sreg.C | cpu.sreg.Z) === 1) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
+        case 'brhi': { if ((cpu.sreg.C | cpu.sreg.Z) === 0) nextPC = (inst.targetPc !== -1 ? inst.targetPc : resolveLabel(inst.args[0], inst.lineNum)) ?? nextPC; break; }
 
         case 'sec': { cpu.sreg.C = 1; break; }
         case 'clc': { cpu.sreg.C = 0; break; }
@@ -2358,7 +2851,11 @@ function cpuStep(silent = false) {
         case 'clt': { cpu.sreg.T = 0; break; }
         case 'sei': { cpu.sreg.I = 1; break; }
         case 'cli': { cpu.sreg.I = 0; break; }
-        case 'nop': break;
+        case 'sleep':
+        case 'wdr':
+        case '_word2':
+        case 'nop':
+            break;
     }
 
     cpu.pc = nextPC;
@@ -2431,7 +2928,7 @@ function syncHardwareState() {
 
 function selectLedPort(portLetter) {
     cpu.selectedPort = portLetter;
-    document.querySelectorAll('.port-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('#cardLedBar .port-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById('btnPort' + portLetter)?.classList.add('active');
     document.getElementById('ledPortTitle').textContent = 'Линейка светодиодов (Порт ' + portLetter + ')';
     renderHardware();
@@ -2590,7 +3087,7 @@ async function connectRealWebSerial() {
     }
 }
 
-/* ================= 20. RUNLOOP С ТРОТТЛИНГОМ РЕНДЕРА ================= */
+/* ================= 20. RUNLOOP, СКОРОСТЬ И МЕНЮ ФАЙЛОВ ================= */
 
 function haltExecution() {
     cpu.running = false;
@@ -2633,7 +3130,7 @@ function runLoop() {
         batchSize = 1;
     } else {
         delay = 16;
-        batchSize = Math.max(1, Math.round(cpu.speed / 25));
+        batchSize = Math.min(500, Math.max(1, Math.round(cpu.speed / 25)));
     }
 
     for (let i = 0; i < batchSize; i++) {
@@ -2658,6 +3155,7 @@ function runLoop() {
 
 function cpuReset() {
     haltExecution();
+    cpuHistory = [];
     cpu.r.fill(0);
     cpu.prevR.fill(0);
     cpu.ram.fill(0);
@@ -2688,9 +3186,41 @@ function cpuReset() {
 }
 
 function updateSpeed(val) {
-    cpu.speed = parseInt(val, 10);
-    const sEl = document.getElementById('speedVal');
-    if (sEl) sEl.textContent = cpu.speed + ' оп/с';
+    const num = Math.min(10000, Math.max(1, parseInt(val, 10) || 40));
+    cpu.speed = num;
+    const sInp = document.getElementById('speedInput');
+    if (sInp) sInp.value = num;
+}
+
+function updateSpeedManual(val) {
+    if (val === '') return;
+    const parsed = parseInt(val, 10);
+    if (isNaN(parsed)) return;
+    const num = Math.min(10000, Math.max(1, parsed));
+    cpu.speed = num;
+    const sRange = document.getElementById('speedRange');
+    if (sRange) sRange.value = Math.min(400, num);
+}
+
+function normalizeSpeedInput(inp) {
+    const num = Math.min(10000, Math.max(1, parseInt(inp.value, 10) || 40));
+    inp.value = num;
+    cpu.speed = num;
+    const sRange = document.getElementById('speedRange');
+    if (sRange) sRange.value = Math.min(400, num);
+}
+
+function handleFileAction(selectEl) {
+    if (!selectEl) return;
+    const action = selectEl.value;
+    selectEl.selectedIndex = 0;
+    if (action === 'open') {
+        document.getElementById('fileInput')?.click();
+    } else if (action === 'save') {
+        saveCodeToFile();
+    } else if (action === 'hex') {
+        exportIntelHex();
+    }
 }
 
 /* ================= 21. ДАМПЫ ПАМЯТИ ================= */
@@ -2717,7 +3247,7 @@ function renderMemoryDumps() {
 
     let output = '';
     if (cpu.memView === 'ram') {
-        for (let addr = 0x0100; addr <= 0x0178; addr += 8) {
+        for (let addr = 0x0100; addr <= 0x01F8; addr += 8) {
             let bytes = [];
             for (let b = 0; b < 8; b++) {
                 let val = readRAM(addr + b);
@@ -2778,6 +3308,9 @@ function updateUI() {
     const cycleElem = document.getElementById('cycleCounter');
     if (cycleElem) cycleElem.textContent = 'Такты: ' + cpu.cycles;
 
+    const btnBack = document.getElementById('btnStepBack');
+    if (btnBack) btnBack.disabled = (cpuHistory.length === 0);
+
     const statusElem = document.getElementById('compilerStatus');
     if (statusElem) {
         if (cpu.error) {
@@ -2831,7 +3364,7 @@ function updateUI() {
     updateGutterPcArrow();
 }
 
-/* ================= 23. ИНСТРУМЕНТЫ: УМНЫЙ WATCH И ИНСПЕКТОР (ОПТИМИЗИРОВАНО) ================= */
+/* ================= 23. ИНСТРУМЕНТЫ: УМНЫЙ WATCH И ИНСПЕКТОР ================= */
 
 function rebuildAsmInspector() {
     const box = document.getElementById('asmInspectorCode');
@@ -2846,9 +3379,10 @@ function rebuildAsmInspector() {
     let out = '';
     for (let i = 0; i < cpu.program.length; i++) {
         const inst = cpu.program[i];
+        if (!inst || inst.op === '_word2') continue;
         const lineText = inst.raw || (inst.op + ' ' + (inst.args ? inst.args.join(', ') : ''));
         const highlighted = highlightCode(lineText);
-        
+
         out += `<div class="inspector-row" id="inspRow_${i}">` +
                `<span class="inspector-pc-arrow" id="inspArrow_${i}"></span>` +
                `<span class="inspector-addr">${i.toString(16).padStart(4, '0').toUpperCase()}:</span>` +
@@ -2901,20 +3435,28 @@ function renderWatchTable() {
         if (countBadge) countBadge.textContent = 'Переменных: ' + cpu.symbols.length;
         cpu.symbols.forEach(sym => {
             let val = 0;
+            let is16 = false;
             if (sym.locType === 'reg') {
-                const regIdx = parseReg(sym.location);
-                val = cpu.r[regIdx];
+                if (sym.location.includes(':')) {
+                    const [loReg, hiReg] = sym.location.split(':');
+                    val = cpu.r[parseReg(loReg)] | (cpu.r[parseReg(hiReg)] << 8);
+                    is16 = true;
+                } else {
+                    val = cpu.r[parseReg(sym.location)];
+                }
             } else if (sym.locType === 'sram') {
                 val = readRAM(parseInt(sym.location, 16) || 0x0100);
             }
-            const sVal = (val & 0x80) ? (val - 256) : val;
+            const sVal = is16 ? ((val & 0x8000) ? (val - 65536) : val) : ((val & 0x80) ? (val - 256) : val);
+            const hexPad = is16 ? 4 : 2;
+            const binPad = is16 ? 16 : 8;
 
             html += '<tr>';
             html += '<td><b>' + sym.name + '</b></td>';
             html += '<td><span class="watch-type-badge">' + sym.type + '</span></td>';
             html += '<td>' + sVal + ' (DEC)</td>';
-            html += '<td>0x' + val.toString(16).padStart(2, '0').toUpperCase() + '</td>';
-            html += '<td>0b' + val.toString(2).padStart(8, '0') + '</td>';
+            html += '<td>0x' + val.toString(16).padStart(hexPad, '0').toUpperCase() + '</td>';
+            html += '<td>0b' + val.toString(2).padStart(binPad, '0') + '</td>';
             html += '<td><span class="watch-loc-badge">' + sym.location + '</span></td>';
             html += '</tr>';
         });
@@ -2963,15 +3505,33 @@ function saveCodeToFile() {
     a.click();
 }
 
+function decodeSmartText(buffer) {
+    const bytes = new Uint8Array(buffer);
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch (e) {
+        try { return new TextDecoder('windows-1251').decode(bytes); }
+        catch (e2) { return new TextDecoder('utf-8').decode(bytes); }
+    }
+}
+
 function loadCodeFromFile(event) {
     const file = event.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-        document.getElementById('asmCode').value = e.target.result;
-        switchLanguageTab(file.name.endsWith('.c') ? 'c' : 'asm');
+        let text = decodeSmartText(e.target.result);
+        if (text.charCodeAt(0) === 0xFEFF) text = text.substring(1);
+        text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const isC = /\.(c|h)$/i.test(file.name);
+        switchLanguageTab(isC ? 'c' : 'asm');
+        const ta = document.getElementById('asmCode');
+        ta.value = text;
+        if (isC) cachedUserCCode = text;
+        updateSyntax();
+        cpuReset();
+        event.target.value = '';
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
 }
 
 /* ================= 24. ПОДСВЕТКА И ГУТТЕР ================= */
@@ -3134,344 +3694,44 @@ function clearEditor() {
     cpuReset();
 }
 
-/* ================= 25. БАЗА ПРОГРАММ ================= */
+/* ================= 25. ШАБЛОНЫ ПРОГРАММ ================= */
 
 const PROGRAMS = {
-    c_interrupt_int0: {
-        hint: "Нажатие кнопки K1 (PD2, INT0) вызывает прерывание по спаду, инвертируя светодиоды RX и TX.",
-        lang: "c",
-        code: `// Внешнее прерывание INT0 по спаду (нажатие K1 на PD2)
-#include <avr/io.h>
-#include <avr/interrupt.h>
-
-ISR(INT0_vect)
-{
-    PORTD ^= (1 << PORTD0) | (1 << PORTD1);
-}
-
-int main(void)
-{
-    EICRA = (1 << ISC01);
-    EIMSK = (1 << INT0);
-
-    DDRD |= (1 << DDD0) | (1 << DDD1);
-    DDRD &= ~(1 << DDD2);
-    PORTD |= (1 << PORTD2); 
-
-    sei();
-
-    while (1) { }
-}`
-    },
-
-    c_example3: {
-        hint: "Опрос кнопки K4 (PB0) и включение светодиода L (PB5) при нажатии.",
-        lang: "c",
-        code: `// Опрос кнопки PB0 (с подтяжкой) и включение светодиода L (PB5)
-#include <avr/io.h>
-
-int main(void)
-{
-    DDRB = 0x20;
-    PORTB |= 0x01;
-
-    while (1)
-    {
-        if ((PINB & 0x01) == 0)
-            PORTB |= 0x20;
-        else
-            PORTB &= ~0x20;
-    }
-}`
-    },
-
-    c_zadanie5: {
-        hint: "Кнопки K1 (PD2), K2 (PD3), K3 (PD4) переключают светодиоды PD0 (RX), PD1 (TX) и PB5 (L).",
-        lang: "c",
-        code: `// Управление светодиодами кнопками-триггерами
-#define F_CPU 16000000UL
-#include <avr/io.h>
-#include <util/delay.h>
-
-int main(void)
-{
-    DDRD |= (1 << DDD0) | (1 << DDD1);
-    DDRB |= (1 << DDB5);
-
-    PORTD &= ~((1 << PORTD0) | (1 << PORTD1));
-    PORTB &= ~(1 << PORTB5);
-
-    DDRD &= ~((1 << DDD2) | (1 << DDD3) | (1 << DDD4));
-    PORTD |= (1 << PORTD2) | (1 << PORTD3) | (1 << PORTD4);
-
-    while (1)
-    {
-        if (!(PIND & (1 << PIND2)))
-        {
-            _delay_ms(40);
-            if (!(PIND & (1 << PIND2)))
-            {
-                PORTD ^= (1 << PORTD0);
-                while (!(PIND & (1 << PIND2)));
-                _delay_ms(40);
-            }
-        }
-
-        if (!(PIND & (1 << PIND3)))
-        {
-            _delay_ms(40);
-            if (!(PIND & (1 << PIND3)))
-            {
-                PORTD ^= (1 << PORTD1);
-                while (!(PIND & (1 << PIND3)));
-                _delay_ms(40);
-            }
-        }
-
-        if (!(PIND & (1 << PIND4)))
-        {
-            _delay_ms(40);
-            if (!(PIND & (1 << PIND4)))
-            {
-                PORTB ^= (1 << PORTB5);
-                while (!(PIND & (1 << PIND4)));
-                _delay_ms(40);
-            }
-        }
-    }
-}`
-    },
-
-    c_uart_rx_led: {
-        hint: "<b>Тема 6:</b> Прием символа 'M' через UART по прерыванию <code>USART_RX_vect</code>. Зажигает светодиод L (PB5). Отправьте символ 'M' через консоль!",
-        lang: "c",
-        code: `#include <avr/io.h>
-#include <avr/interrupt.h>
-
-ISR (USART_RX_vect)
-{
-    uint8_t data = UDR0;
-    if (data == 'M')
-    {
-        PORTB |= (1 << PB5);    // Зажечь светодиод L
-    }
-    else
-    {
-        PORTB &= ~(1 << PB5);   // Погасить светодиод L
-    }
-}
-
-int main(void)
-{
-    DDRB |= (1 << PB5);         // PB5 на выход
-    PORTB &= ~(1 << PB5);
-
-    UBRR0 = 103;
-    UCSR0B = (1 << RXEN0) | (1 << RXCIE0);   // Приемник и прерывание по приему
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // 8 бит данных
-
-    sei();
-
-    while (1)
-    {
-    }
-}`
-    },
-
-    asm_uart_tx_button: {
-        hint: "<b>Тема 6:</b> Нажмите кнопку K1 (PD2). Срабатывает прерывание INT0, и в UDR0 отправляется символ '>' (0x3E).",
+    tpl_asm: {
+        hint: "Базовый шаблон <b>AVR Assembler</b>: мигание встроенным светодиодом <b>L (PB5)</b>.",
         lang: "asm",
-        code: `.include "m328Pdef.inc"
-
-.org 0x0000
-    jmp Reset
-.org 0x0002
-    jmp knopka
-
-Reset:
-    ldi r16, 0x03 : sts EICRA, r16
-    ldi r16, 0x01 : out EIMSK, r16
-    cbi DDRD, 2   : sbi PORTD, 2
-
-    ldi r16, 0x00 : sts UBRR0H, r16
-    ldi r16, 103  : sts UBRR0L, r16
-
-    ldi r16, (1 << TXEN0) : sts UCSR0B, r16
-    ldi r16, (1 << UCSZ01) | (1 << UCSZ00) : sts UCSR0C, r16
-
-    sei
-
-main:
-    jmp main
-
-knopka:
-    ldi r16, 0x3E       ; Символ '>'
-    sts UDR0, r16
-    reti`
-    },
-
-    asm_uart_flash_string: {
-        hint: "<b>Тема 6:</b> Чтение строки из Flash через <code>lpm r16, Z+</code> с анализом готовности буфера <code>UDRE0</code> (бит 5 UCSR0A).",
-        lang: "asm",
-        code: `.include "m328Pdef.inc"
-
-.org 0x0000
-    jmp Reset
-
-Reset:
-    ldi r16, 0x00 : sts UBRR0H, r16
-    ldi r16, 103  : sts UBRR0L, r16
-    ldi r16, (1 << TXEN0) : sts UCSR0B, r16
-    ldi r16, (1 << UCSZ01) | (1 << UCSZ00) : sts UCSR0C, r16
-    sei
-
-main:
-    ldi ZL, low(Msg << 1)
-    ldi ZH, high(Msg << 1)
-    ldi r18, 0x17       ; Длина строки (23 байта)
-
-send:
-    lpm r16, Z+
-    sts UDR0, r16
-    subi r18, 0x01
-
-repeat:
-    lds r17, UCSR0A
-    bst r17, 5          ; Бит UDRE0 (готовность буфера)
-    brtc repeat
-    cpi r18, 0x00
-    breq main
-    jmp send
-
-.cseg
-Msg: .db "Atmega328P:ReadyToWork", '\\n'`
-    },
-
-    c_blink_counter: {
-        hint: "Мигание светодиодом PB5 через счетчик до 800 000 с вложенными ветками if-else.",
-        lang: "c",
-        code: `// Мигание встроенным светодиодом на плате (PB5) через счетчик
-#define F_CPU 16000000UL
-#include <avr/io.h>
-
-int main(void)
-{
-    DDRB |= (1 << DDB5);
-
-    uint32_t x = 0;
-    int flag = 0;
-
-    while (1)
-    {
-        if (x >= 800000)
-        {
-            if (flag == 0)
-            {
-                PORTB |= (1 << PORTB5);
-                flag = 1;
-            }
-            else
-            {
-                PORTB &= ~(1 << PORTB5);
-                flag = 0;
-            }
-            x = 0;
-        }
-        x++;
-    }
-}`
-    },
-
-    test_all: {
-        hint: "Комплексный тест: проверка команд, регистров и всех флагов SREG (I, T, H, S, V, N, Z, C).",
-        lang: "asm",
-        code: `; Комплексный тест: проверка команд, регистров и всех флагов SREG
-.include "m328pdef.inc"
-start:
-    ldi r16, 0x08 : out sph, r16
-    ldi r16, 0xff : out spl, r16
-    sec : clc : sez : clz : sen : cln : sev : clv : set : clt : seh : clh : sei : cli : nop
-    ldi r16, 0x0F
-    ldi r17, 0x01
-    add r16, r17
-    ldi r17, 10
-    subi r17, -3
-    ldi r18, 0x80
-    neg r18
-    break
-finish:
-    rjmp finish`
-    },
-
-    led_running: {
-        hint: "Бегущий огонёк по светодиодам Порта D.",
-        lang: "asm",
-        code: `; Бегущий огонёк по выводам PD0..PD7
+        code: `; Шаблон программы на AVR Assembler (ATmega328P)
 .include "m328pdef.inc"
 
+.org 0x0000
+    rjmp start
+
 start:
-    ser r16
-    out DDRD, r16
-    ldi r17, 1
+    ldi r16, 0x20       ; PB5 (светодиод L) на выход
+    out DDRB, r16
 
 loop:
-    out PORTD, r17
-    lsl r17
-    brne loop
-    ldi r17, 1
+    sbi PORTB, 5        ; Включить светодиод L
+    cbi PORTB, 5        ; Выключить светодиод L
     rjmp loop`
     },
 
-    uart_tx: {
-        hint: "Вывод символов текста в виртуальный порт UDR0 (монитор UART).",
-        lang: "asm",
-        code: `; Отправка текстовых символов в терминал UART
-.include "m328pdef.inc"
-start:
-    ldi r16, 0x48 : sts UDR0, r16
-    ldi r16, 0x69 : sts UDR0, r16
-    ldi r16, 0x21 : sts UDR0, r16
-    ldi r16, 0x0A : sts UDR0, r16
-stop:
-    break`
-    },
+    tpl_c: {
+        hint: "Базовый шаблон <b>C (avr-gcc)</b>: переключение встроенного светодиода <b>L (PB5)</b>.",
+        lang: "c",
+        code: `// Шаблон программы на Си (avr-gcc, ATmega328P)
+#define F_CPU 16000000UL
+#include <avr/io.h>
 
-    sort_ram: {
-        hint: "Программа записывает 5 чисел в ОЗУ (0x0100..0x0104) и сортирует их по возрастанию.",
-        lang: "asm",
-        code: `; Сортировка массива из 5 чисел в ОЗУ (0x0100..0x0104) по возрастанию
-.include "m328pdef.inc"
+int main(void)
+{
+    DDRB |= (1 << PB5);      // PB5 (светодиод L) на выход
 
-ldi r16, 0x16 : sts 0x0100, r16
-ldi r16, 0x03 : sts 0x0101, r16
-ldi r16, 0x25 : sts 0x0102, r16
-ldi r16, 0x45 : sts 0x0103, r16
-ldi r16, 0x01 : sts 0x0104, r16
-
-ldi r20, 5
-out_1:
-    ldi xh, 0x01 : ldi xl, 0x00
-    ldi r21, 4
-
-in_1:
-    ld r16, x+
-    ld r17, x
-    cp r16, r17
-    brlo no_s
-
-    st x, r16
-    st -x, r17
-    adiw xl, 1
-
-no_s:
-    dec r21
-    brne in_1
-    dec r20
-    brne out_1
-
-finish:
-    break
-    rjmp finish`
+    while (1)
+    {
+        PORTB ^= (1 << PB5); // Переключить светодиод L
+    }
+}`
     }
 };
 
@@ -3513,7 +3773,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const ghostOverlay = document.getElementById('ghostOverlay');
     const gutter = document.getElementById('lineGutter');
 
+    function syncEditorScroll() {
+        highlighting.scrollTop = txtArea.scrollTop;
+        highlighting.scrollLeft = txtArea.scrollLeft;
+        if (ghostOverlay) {
+            ghostOverlay.scrollTop = txtArea.scrollTop;
+            ghostOverlay.scrollLeft = txtArea.scrollLeft;
+        }
+        gutter.scrollTop = txtArea.scrollTop;
+    }
+
     let inputDebounce = null;
+    function scheduleCompileAfterEdit() {
+        updateSyntax();
+        updateGhostAutocomplete();
+        requestAnimationFrame(syncEditorScroll);
+        clearTimeout(inputDebounce);
+        inputDebounce = setTimeout(() => cpuReset(), 150);
+    }
+
     txtArea.addEventListener('input', () => {
         clearTimeout(inputDebounce);
         inputDebounce = setTimeout(() => {
@@ -3540,52 +3818,126 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 120);
     });
 
-    txtArea.addEventListener('scroll', () => {
-        highlighting.scrollTop = txtArea.scrollTop;
-        highlighting.scrollLeft = txtArea.scrollLeft;
-        if (ghostOverlay) {
-            ghostOverlay.scrollTop = txtArea.scrollTop;
-            ghostOverlay.scrollLeft = txtArea.scrollLeft;
-        }
-        gutter.scrollTop = txtArea.scrollTop;
-    });
+    txtArea.addEventListener('scroll', syncEditorScroll);
 
     txtArea.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
+            e.preventDefault();
             if (currentGhostSuggestion) {
-                e.preventDefault();
                 applyGhostCompletion();
+            } else {
+                const start = txtArea.selectionStart;
+                const end = txtArea.selectionEnd;
+                txtArea.value = txtArea.value.substring(0, start) + '    ' + txtArea.value.substring(end);
+                txtArea.selectionStart = txtArea.selectionEnd = start + 4;
+                scheduleCompileAfterEdit();
+            }
+            return;
+        }
+
+        if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            const start = txtArea.selectionStart;
+            const end = txtArea.selectionEnd;
+            const val = txtArea.value;
+
+            const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+            const lineBefore = val.substring(lineStart, start);
+            const baseIndent = (lineBefore.match(/^([ \t]*)/) || ['', ''])[1];
+            const indentUnit = baseIndent.includes('\t') ? '\t' : '    ';
+            const trimmedBefore = lineBefore.trimEnd();
+            const opensBrace = trimmedBefore.endsWith('{');
+            const charAfter = val[end] || '';
+
+            let insertText = '\n' + baseIndent + (opensBrace ? indentUnit : '');
+            let nextCursorPos = start + 1 + baseIndent.length + (opensBrace ? indentUnit.length : 0);
+
+            if (opensBrace && charAfter === '}') {
+                insertText += '\n' + baseIndent;
+            }
+
+            txtArea.value = val.substring(0, start) + insertText + val.substring(end);
+            txtArea.selectionStart = txtArea.selectionEnd = nextCursorPos;
+            scheduleCompileAfterEdit();
+            return;
+        }
+
+        if (e.key === '}' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            const start = txtArea.selectionStart;
+            const end = txtArea.selectionEnd;
+            if (start === end) {
+                const val = txtArea.value;
+                const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+                const lineBefore = val.substring(lineStart, start);
+                if (/^[ \t]+$/.test(lineBefore)) {
+                    e.preventDefault();
+                    let dedented = lineBefore;
+                    if (dedented.endsWith('\t')) dedented = dedented.slice(0, -1);
+                    else if (dedented.endsWith('    ')) dedented = dedented.slice(0, -4);
+                    else dedented = '';
+
+                    txtArea.value = val.substring(0, lineStart) + dedented + '}' + val.substring(end);
+                    txtArea.selectionStart = txtArea.selectionEnd = lineStart + dedented.length + 1;
+                    scheduleCompileAfterEdit();
+                }
             }
         }
     });
 
+    txtArea.addEventListener('keyup', (e) => {
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+            updateGhostAutocomplete();
+        }
+    });
+
+    txtArea.addEventListener('click', () => updateGhostAutocomplete());
+
+    txtArea.addEventListener('blur', () => {
+        currentGhostSuggestion = '';
+        if (ghostOverlay) ghostOverlay.innerHTML = '';
+    });
+
     window.addEventListener('resize', () => {
+        syncPanelResizers();
         resizeAnalyzerCanvas();
     });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'F11') { e.preventDefault(); cpuStep(); }
+        if (e.key === 'F5') { e.preventDefault(); toggleRun(); }
+        if (e.key === 'F11') {
+            e.preventDefault();
+            if (e.shiftKey) cpuStepBack();
+            else cpuStep();
+        }
         if (e.key === 'F9') {
             e.preventDefault();
             toggleBreakpoint(txtArea.value.substring(0, txtArea.selectionStart).split('\n').length);
         }
     });
 
-    initRegistersDom();
-    initDragAndDrop();
-    applyAppZoom();
-    renderChannelSelector();
-    loadSelectedExample();
-    syncAnalogHardware();
-
-    if (window.innerWidth <= 900) {
-        togglePanel('editor');
-    }
-
-    setTimeout(resizeAnalyzerCanvas, 100);
     if (localStorage.getItem('avr_theme') === 'light') {
         document.body.classList.add('theme-light');
         const txt = document.getElementById('btnThemeText');
         if (txt) txt.textContent = 'Темная';
     }
+
+    initRegistersDom();
+    initDragAndDrop();
+
+    if (window.innerWidth <= 900) {
+        togglePanel('editor');
+    } else {
+        PANEL_LIST.forEach(name => {
+            document.getElementById('panel_' + name)?.classList.toggle('panel-hidden', !activePanels[name]);
+            document.getElementById('tabBtn_' + name)?.classList.toggle('active', activePanels[name]);
+        });
+    }
+    syncPanelResizers();
+
+    applyAppZoom();
+    renderChannelSelector();
+    loadSelectedExample();
+    syncAnalogHardware();
+
+    setTimeout(resizeAnalyzerCanvas, 100);
 });

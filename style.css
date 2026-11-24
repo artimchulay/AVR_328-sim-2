@@ -506,7 +506,7 @@ button { cursor: pointer; }
 .line-gutter {
   width: 46px;
   height: 100%;
-  padding: 8px 0 24px 0;
+  padding: 8px 0 48px 0;
   background: #040609;
   border-right: 1px solid #1a1e28;
   user-select: none;
@@ -560,21 +560,39 @@ pre#highlighting, textarea#asmCode, #ghostOverlay {
 textarea#asmCode {
   background: transparent !important;
   color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
   caret-color: #38bdf8 !important;
   resize: none;
   z-index: 3;
   overflow: auto !important;
 }
 textarea#asmCode::selection {
-  background: rgba(62, 110, 196, 0.32);
-  color: transparent;
+  background: rgba(62, 110, 196, 0.32) !important;
+  color: rgba(0, 0, 0, 0.01) !important;
+  -webkit-text-fill-color: transparent !important;
 }
 body.theme-light textarea#asmCode::selection {
-  background: rgba(52, 94, 168, 0.22);
-  color: transparent;
+  background: rgba(52, 94, 168, 0.24) !important;
+  color: rgba(0, 0, 0, 0.01) !important;
+  -webkit-text-fill-color: transparent !important;
 }
-pre#highlighting { background: transparent; color: #e2e8f0; pointer-events: none; z-index: 1; overflow: auto !important; scrollbar-color: transparent transparent; }
-#ghostOverlay { background: transparent; color: transparent; pointer-events: none; z-index: 2; overflow: auto !important; scrollbar-color: transparent transparent; }
+pre#highlighting {
+  background: transparent;
+  color: #e2e8f0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden !important;
+  padding: 8px 48px 48px 10px !important;
+}
+#ghostOverlay {
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+  z-index: 2;
+  overflow: hidden !important;
+  padding: 8px 48px 48px 10px !important;
+}
+
 pre#highlighting::-webkit-scrollbar,
 #ghostOverlay::-webkit-scrollbar {
   width: 8px;

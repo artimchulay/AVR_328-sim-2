@@ -133,9 +133,7 @@
           <button type="button" class="btn-mini" onclick="openIoModal()">⚙️ Настройка I/O</button>
         </div>
 
-        <div class="board-scroll-area">
-
-          <div class="board-card lcd-card" id="cardLcd">
+      <div class="board-card lcd-card" id="cardLcd">
             <div class="card-collapsible-header" onclick="toggleCardCollapse('cardLcd')">
               <div class="card-title">Текстовый дисплей LCD 1602 (HD44780)</div>
               <div class="header-actions">
@@ -231,9 +229,7 @@
               </div>
             </div>
           </div>
-
-          <div class="board-card uart-card" id="cardUart">
-            <div class="card-collapsible-header" onclick="toggleCardCollapse('cardUart')">
+<div class="card-collapsible-header" onclick="toggleCardCollapse('cardUart')">
               <div class="uart-header-left">
                 <div class="card-title">Терминал UART (UDR0)</div>
                 <div class="port-selector-btns">
@@ -242,6 +238,7 @@
                 </div>
               </div>
               <div class="header-actions">
+                <button type="button" class="btn-mini" id="btnUartHexMode" onclick="event.stopPropagation(); toggleUartFormat()" title="Переключить вывод UART: ASCII / HEX">ASCII</button>
                 <button type="button" class="btn-mini btn-serial-connect" id="btnWebSerial" onclick="event.stopPropagation(); connectRealWebSerial()">🌐 COM</button>
                 <button type="button" class="btn-mini" onclick="event.stopPropagation(); clearUart()">Очистить</button>
                 <span class="collapse-icon" id="cardUart_icon">▲</span>
@@ -411,9 +408,8 @@
     </div>
   </div>
 </div>
-
 <!-- ================= МОДАЛЬНОЕ ОКНО I/O ================= -->
-<div class="modal-backdrop" id="ioModal" style="display:none">
+<div class="modal-backdrop" id="ioModal" style="display:none" onclick="if(event.target===this) closeIoModal()">
   <div class="modal-card">
     <div class="modal-header">
       <h3>⚙️ Конфигуратор компонентов платы</h3>
@@ -424,7 +420,7 @@
         <button type="button" class="btn-mini" onclick="resetIoToDefault()">Сброс к K1..K8</button>
         <button type="button" class="btn-mini" onclick="clearAllCustomIo()">Очистить все доп. элементы</button>
       </div>
-      <div class="add-io-form">
+      <div class="add-io-form" onkeydown="if(event.key==='Enter'){ event.preventDefault(); addCustomIoComponent(); }">
         <div class="form-title">➕ Добавить новый компонент</div>
         <div class="form-row">
           <label for="modalIoType">Тип элемента:</label>
@@ -465,6 +461,10 @@
           <input type="text" id="modalIoName" placeholder="Например: Датчик двери" maxlength="18">
         </div>
         <button type="button" class="btn btn-step" onclick="addCustomIoComponent()">Добавить на плату ➔</button>
+      </div>
+      <div class="modal-added-section">
+        <div class="form-title">📋 Добавленные компоненты</div>
+        <div class="modal-added-list" id="modalCustomList"></div>
       </div>
     </div>
   </div>
